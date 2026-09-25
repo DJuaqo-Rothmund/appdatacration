@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 os.environ.setdefault("KIVY_LOG_MODE", "PYTHON")
 
@@ -25,14 +26,13 @@ from kivymd.uix.label import MDLabel  # noqa: E402
 from kivymd.uix.screenmanager import MDScreenManager  # noqa: E402
 from kivymd.uix.snackbar import MDSnackbar  # noqa: E402
 from kivy.uix.screenmanager import SlideTransition  # noqa: E402
-from PIL import Image, ImageOps  # noqa: E402
 
 from ui import theme  # noqa: E402
 
 theme.install_palette()  # antes de cargar widgets KivyMD con color
 
 from ai_classifier import PhenologyClassifier, PinGuard  # noqa: E402
-from android_bridge import create_media, request_runtime_permissions  # noqa: E402
+from android_bridge import create_media, make_thumbnail, request_runtime_permissions  # noqa: E402
 from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, resource_path  # noqa: E402
@@ -60,6 +60,7 @@ class FenoRubusApp(MDApp):
         self.week = self.db.current_week()
         self.season = self.week["season"]
         self._history: list[str] = []
+        self.workers = ThreadPoolExecutor(max_workers=2)  # miniaturas y fotos
         self._file_manager = None
 
         Builder.load_file(resource_path("ui", "layout.kv"))
@@ -74,7 +75,7 @@ class FenoRubusApp(MDApp):
         return self.sm
 
     def on_start(self):
-        self.home.refresh()
+        self.home.refresh_current()
         request_runtime_permissions()
         self.reminders.apply()
         Clock.schedule_interval(lambda *_: self._check_reminder(), 60)
@@ -84,6 +85,7 @@ class FenoRubusApp(MDApp):
         self.refresh_home()
 
     def on_stop(self):
+        self.workers.shutdown(wait=False)
         self.db.close()
 
     # ------------------------------------------------------- navegación
@@ -111,7 +113,8 @@ class FenoRubusApp(MDApp):
         return False
 
     def refresh_home(self):
-        self.home.refresh()
+        # Solo la pestaña visible; las demás se refrescan al seleccionarlas.
+        self.home.refresh_current()
 
     def open_observation(self, variety_id: int, week_id: int):
         self.observation.load(variety_id, week_id)
@@ -143,21 +146,37 @@ class FenoRubusApp(MDApp):
                    md_bg_color=theme.c(theme.SLATE), y=dp(24), pos_hint={"center_x": .5},
                    size_hint_x=.92, duration=2.5).open()
 
-    def thumb(self, path: str, size: int = 320) -> str:
-        """Miniatura cacheada (evita cargar fotos de 2048 px como texturas)."""
+    def _thumb_dest(self, path: str, size: int) -> str | None:
         try:
             key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{size}".encode()).hexdigest()
         except OSError:
+            return None
+        return os.path.join(data_subdir("thumbs"), key + ".jpg")
+
+    def thumb(self, path: str, size: int = 320) -> str:
+        """Miniatura cacheada (síncrona; usar thumb_async desde la interfaz)."""
+        dest = self._thumb_dest(path, size)
+        if dest is None:
             return path
-        dest = os.path.join(data_subdir("thumbs"), key + ".jpg")
         if not os.path.exists(dest):
             try:
-                img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
-                img.thumbnail((size, size))
-                img.save(dest, "JPEG", quality=80)
+                make_thumbnail(path, dest, size)
             except Exception:
                 return path
         return dest
+
+    def thumb_async(self, path: str, size: int, callback) -> None:
+        """Entrega la miniatura a `callback` sin bloquear la interfaz."""
+        dest = self._thumb_dest(path, size)
+        if dest and os.path.exists(dest):
+            callback(dest)
+            return
+
+        def work():
+            result = self.thumb(path, size)
+            Clock.schedule_once(lambda *_: callback(result))
+
+        self.workers.submit(work)
 
     def run_report(self, job, on_done=None):
         self.toast("Generando informe…")

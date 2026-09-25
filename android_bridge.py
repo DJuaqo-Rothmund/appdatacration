@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import shutil
+import threading
 import webbrowser
 from typing import Callable
 
@@ -34,14 +35,30 @@ PhotoCallback = Callable[[str | None, str], None]   # (ruta_temporal | None, ori
 # ===========================================================================
 # Utilidades comunes
 # ===========================================================================
-def store_photo(src: str, dest_dir: str, basename: str, max_side: int = 2048) -> str:
+def store_photo(src: str, dest_dir: str, basename: str, max_side: int = 1600) -> str:
     """Normaliza (EXIF, tamaño, JPEG q88) y guarda la foto en el almacenamiento de la app."""
     os.makedirs(dest_dir, exist_ok=True)
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(dest_dir, f"{basename}_{stamp}.jpg")
-    img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+    img = Image.open(src)
+    # Decodifica el JPEG ya reducido (escalado DCT 1/2, 1/4...): mucho más rápido y
+    # con menos memoria que abrir la foto de 12 MP a tamaño completo.
+    w, h = img.size
+    scale = max_side / max(w, h)
+    if scale < 1:
+        img.draft("RGB", (int(w * scale), int(h * scale)))
+    img = ImageOps.exif_transpose(img).convert("RGB")
     img.thumbnail((max_side, max_side), Image.LANCZOS)
-    img.save(dest, "JPEG", quality=88, optimize=True)
+    img.save(dest, "JPEG", quality=88)
+    return dest
+
+
+def make_thumbnail(src: str, dest: str, size: int) -> str:
+    img = Image.open(src)
+    img.draft("RGB", (size, size))
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    img.thumbnail((size, size))
+    img.save(dest, "JPEG", quality=80)
     return dest
 
 
@@ -177,6 +194,18 @@ class AndroidMedia:
             return
         callback, uri = self._pending.pop(request_code)
         ok = result_code == self.Activity.RESULT_OK
+        # La copia del archivo (varios MB) se hace fuera del hilo de la interfaz.
+        threading.Thread(target=self._handle_result, daemon=True,
+                         args=(request_code, ok, intent, callback, uri)).start()
+
+    def _handle_result(self, request_code, ok, intent, callback, uri):
+        try:
+            self._process_result(request_code, ok, intent, callback, uri)
+        finally:
+            from jnius import detach  # type: ignore
+            detach()  # obligatorio en hilos Python que usan Pyjnius
+
+    def _process_result(self, request_code, ok, intent, callback, uri):
         try:
             if request_code == RC_CAMERA:
                 if not ok:

@@ -10,6 +10,8 @@ import threading
 
 from kivy.clock import Clock, mainthread
 from kivy.metrics import dp
+from kivy.uix.layout import Layout
+from kivy.uix.widget import Widget
 from kivy.properties import (BooleanProperty, ColorProperty, ListProperty, NumericProperty,
                              ObjectProperty, StringProperty)
 from kivymd.app import MDApp
@@ -35,6 +37,18 @@ from ui.theme import c
 
 def app() -> "MDApp":
     return MDApp.get_running_app()
+
+
+def fast_clear(container) -> None:
+    """
+    Vacía un contenedor sin pasar por ThemableBehavior.remove_widget de KivyMD 1.2,
+    que recorre todos los observadores del tema (lista que crece con cada widget
+    creado) y vuelve cada refresco más lento que el anterior. Las suscripciones de
+    Kivy a métodos son referencias débiles, así que no quedan widgets retenidos.
+    """
+    remove = Layout.remove_widget if isinstance(container, Layout) else Widget.remove_widget
+    for child in list(container.children):
+        remove(container, child)
 
 
 # ===========================================================================
@@ -79,12 +93,16 @@ def open_menu(caller, items: list[tuple[str, callable]], width_mult: int = 5):
     return menu
 
 
-def thumb_widget(path: str | None, size: int = 56, icon: str = "image-off-outline"):
-    if path and os.path.exists(path):
-        return FitImage(source=app().thumb(path), radius=[dp(8)])
+def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outline"):
+    """Marcador inmediato; la miniatura se genera en segundo plano y lo reemplaza."""
     box = MDCard(md_bg_color=c(theme.OLIVE_SOFT), radius=[dp(8)], elevation=0)
     box.add_widget(MDIcon(icon=icon, halign="center", theme_text_color="Custom",
                           text_color=c(theme.OLIVE)))
+    if path and os.path.exists(path):
+        def ready(src):
+            fast_clear(box)
+            box.add_widget(FitImage(source=src, radius=[dp(8)]))
+        app().thumb_async(path, size, ready)
     return box
 
 
@@ -154,6 +172,10 @@ class HomeScreen(MDScreen):
         for tab in ("sampling", "varieties", "reports", "settings"):
             getattr(self.ids, tab).refresh()
 
+    def refresh_current(self):
+        name = self.ids.nav.ids.tab_manager.current or "sampling"
+        getattr(self.ids, name).refresh()
+
 
 class VarietyRow(MDCard):
     title = StringProperty()
@@ -165,6 +187,7 @@ class VarietyRow(MDCard):
     code_fg = ColorProperty(c(theme.SLATE))
     done = BooleanProperty(False)
     variety_id = NumericProperty()
+    thumb_src = StringProperty("")
 
 
 class SamplingTab(MDBoxLayout):
@@ -179,26 +202,38 @@ class SamplingTab(MDBoxLayout):
                                     f"{end.day} {ph.MESES[end.month - 1][:3]} {end.year}")
         rows = a.db.week_overview(week["id"])
         box = self.ids.rows
-        box.clear_widgets()
+        # Las filas se reutilizan: crear/destruir widgets KivyMD es lo más costoso.
+        cache = getattr(self, "_rows", {})
+        if list(cache) != [r["variety"]["id"] for r in rows]:
+            fast_clear(box)
+            cache = {}
+            for r in rows:
+                row = VarietyRow(variety_id=r["variety"]["id"])
+                row.bind(on_release=lambda w: a.open_observation(w.variety_id, a.week["id"]))
+                cache[r["variety"]["id"]] = row
+                box.add_widget(row)
+            self._rows = cache
         complete = 0
         names = a.db.bbch_names()
         for r in rows:
             obs, photos, v = r["observation"], r["photos"], r["variety"]
             code = obs["bbch_code"] if obs else None
             n = len(photos)
-            done = code is not None and n == 2
-            complete += done
+            complete += code is not None and n == 2
             bg, fg = bbch_tag_colors(code)
-            subtitle = (obs["bbch_label"] or ph.bbch_label(code, names)) if code is not None \
+            row = cache[v["id"]]
+            row.title = v["name"]
+            row.subtitle = (obs["bbch_label"] or ph.bbch_label(code, names)) if code is not None \
                 else ("Foto sin estado asignado" if n else "Pendiente de registro")
-            row = VarietyRow(title=v["name"], subtitle=subtitle, photos=n, photo_tag=f"FOTOS {n}/2",
-                             code_tag=f"BBCH {code:02d}" if code is not None else "BBCH —",
-                             code_bg=bg, code_fg=fg, done=code is not None, variety_id=v["id"])
+            row.photos, row.photo_tag = n, f"FOTOS {n}/2"
+            row.code_tag = f"BBCH {code:02d}" if code is not None else "BBCH —"
+            row.code_bg, row.code_fg, row.done = bg, fg, code is not None
             thumb = photos.get("detail") or photos.get("canopy")
-            row.ids.thumb_box.add_widget(thumb_widget(thumb["path"] if thumb else None,
-                                                      icon="sprout-outline"))
-            row.bind(on_release=lambda w: a.open_observation(w.variety_id, a.week["id"]))
-            box.add_widget(row)
+            src = thumb["path"] if thumb else ""
+            if src != row.thumb_src or not row.ids.thumb_box.children:
+                row.thumb_src = src
+                fast_clear(row.ids.thumb_box)
+                row.ids.thumb_box.add_widget(thumb_widget(src or None, icon="sprout-outline"))
         total = max(1, len(rows))
         self.ids.progress.value = complete / total
         self.ids.progress_text.text = f"{complete}/{len(rows)} completas"
@@ -240,8 +275,18 @@ class VarietiesTab(MDScreen):
         self.ids.season_caption.text = (f"Temporada {season}-{season + 1} · toque una variedad "
                                         f"para editar sus parámetros biométricos")
         box = self.ids.rows
-        box.clear_widgets()
-        for v in a.db.list_varieties():
+        varieties = a.db.list_varieties()
+        cache = getattr(self, "_rows", {})
+        if list(cache) != [v["id"] for v in varieties]:  # filas reutilizables
+            fast_clear(box)
+            cache = {}
+            for v in varieties:
+                row = VarietyCatalogRow(variety_id=v["id"], tab=self)
+                row.bind(on_release=lambda w: self.open_variety(w.variety_id))
+                cache[v["id"]] = row
+                box.add_widget(row)
+            self._rows = cache
+        for v in varieties:
             m = a.db.get_metrics(v["id"], season)
             parts = []
             if m["historical_yield"] is not None:
@@ -253,11 +298,9 @@ class VarietiesTab(MDScreen):
             n_custom = len(a.db.list_custom_fields(v["id"], season))
             if n_custom:
                 parts.append(f"{n_custom} campo(s) extra")
-            row = VarietyCatalogRow(title=v["name"], code=v["code"] or "",
-                                    summary=" · ".join(parts) or "Sin parámetros cargados",
-                                    variety_id=v["id"], tab=self)
-            row.bind(on_release=lambda w: self.open_variety(w.variety_id))
-            box.add_widget(row)
+            row = cache[v["id"]]
+            row.title, row.code = v["name"], v["code"] or ""
+            row.summary = " · ".join(parts) or "Sin parámetros cargados"
 
     def open_variety(self, variety_id: int):
         app().open_variety(variety_id)
@@ -333,7 +376,7 @@ class VarietyScreen(MDScreen):
     def load_custom(self):
         a = app()
         box = self.ids.custom
-        box.clear_widgets()
+        fast_clear(box)
         fields = a.db.list_custom_fields(self.variety_id, a.season)
         for f in fields:
             box.add_widget(CustomFieldRow(key=f["key"], value=f"{f['value']} {f['unit']}".strip(),
@@ -414,12 +457,21 @@ class PhotoSlot(MDCard):
     has_photo = BooleanProperty(False)
     screen = ObjectProperty()
 
+    def show_busy(self, text: str = "Procesando foto…"):
+        from kivymd.uix.spinner import MDSpinner
+        box = self.ids.image_box
+        fast_clear(box)
+        box.add_widget(MDSpinner(size_hint=(None, None), size=(dp(32), dp(32)),
+                                 pos_hint={"center_x": .5, "center_y": .5},
+                                 color=c(theme.OLIVE)))
+        self.meta = text
+
     def show(self, photo: dict | None):
         box = self.ids.image_box
-        box.clear_widgets()
+        fast_clear(box)
         self.has_photo = bool(photo)
         if photo:
-            box.add_widget(FitImage(source=app().thumb(photo["path"], 640), radius=[dp(8)]))
+            box.add_widget(thumb_widget(photo["path"], 640))
             origin = {"camera": "cámara", "gallery": "galería"}.get(photo["source"], photo["source"])
             self.meta = f"{origin} · {photo['captured_at'][:16].replace('T', ' ')}"
         else:
@@ -455,7 +507,7 @@ class ObservationScreen(MDScreen):
 
     def _show_ai_from_obs(self):
         o = self.obs
-        self.ids.alternatives.clear_widgets()
+        fast_clear(self.ids.alternatives)
         if o["ai_code"] is None:
             self.ids.ai_label.text = "Suba la foto de detalle para obtener una sugerencia."
             self.ids.ai_conf.value = 0
@@ -478,7 +530,7 @@ class ObservationScreen(MDScreen):
 
     def _alternatives(self, top):
         box = self.ids.alternatives
-        box.clear_widgets()
+        fast_clear(box)
         for code, p in top[1:3]:
             box.add_widget(MDRectangleFlatButton(
                 text=f"BBCH {code:02d} · {p:.0%}", theme_text_color="Custom",
@@ -498,12 +550,30 @@ class ObservationScreen(MDScreen):
                     a.toast("No se pudo obtener la foto.")
                 return
             season, n = self.week["season"], self.week["week_number"]
-            dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
-            path = store_photo(tmp_path, dest_dir, f"{slugify(self.variety['name'])}_{kind}")
-            a.db.set_photo(self.obs["id"], kind, path, source=origin)
-            self.ids[kind].show(a.db.get_photos(self.obs["id"]).get(kind))
-            if kind == "detail":
-                self.analyze()
+            obs_id = self.obs["id"]
+            self.ids[kind].show_busy()
+
+            def work():  # normalizar y guardar la foto fuera del hilo de la interfaz
+                try:
+                    dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
+                    path = store_photo(tmp_path, dest_dir, f"{slugify(self.variety['name'])}_{kind}")
+                    a.db.set_photo(obs_id, kind, path, source=origin)
+                    a.thumb(path, 640)
+                    Clock.schedule_once(lambda *_: stored(None))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: stored(error))
+
+            def stored(error):
+                if self.obs["id"] != obs_id:  # el usuario ya cambió de registro
+                    return
+                self.ids[kind].show(a.db.get_photos(obs_id).get(kind))
+                if error:
+                    a.toast(f"No se pudo guardar la foto: {error}")
+                elif kind == "detail":
+                    self.analyze()
+
+            a.workers.submit(work)
 
         if source == "camera":
             a.media.take_photo(done)
@@ -693,7 +763,7 @@ class ReportsTab(MDScreen):
 
     def list_recent(self):
         box = self.ids.recent
-        box.clear_widgets()
+        fast_clear(box)
         folder = app().reports.out_dir
         files = sorted((os.path.join(folder, f) for f in os.listdir(folder)
                         if f.endswith((".html", ".zip"))), key=os.path.getmtime, reverse=True)
@@ -727,7 +797,7 @@ class SettingsTab(MDScreen):
                                    f"{ph.format_date_es(nxt.date())}, {nxt:%H:%M}"
                                    if nxt else "Recordatorios desactivados.")
         box = self.ids.exact_box
-        box.clear_widgets()
+        fast_clear(box)
         if IS_ANDROID and cfg.enabled and not can_schedule_exact():
             box.add_widget(MDRectangleFlatButton(
                 text="Permitir alarmas exactas", theme_text_color="Custom",
@@ -832,7 +902,7 @@ class AILabScreen(MDScreen):
     # ----------------------------------------------------------- documentos
     def refresh_docs(self):
         box = self.ids.docs
-        box.clear_widgets()
+        fast_clear(box)
         for d in app().db.list_documents():
             item = TwoLineListItem(
                 text=d["title"],
@@ -874,9 +944,10 @@ class AILabScreen(MDScreen):
         a = app()
         self.ids.auto_learn.active = bool(a.db.get_setting("ai_auto_learn", False))
         box = self.ids.photos
-        box.clear_widgets()
+        fast_clear(box)
         photos = a.db.list_detail_photos(a.season)
-        for p in photos[:80]:
+        limit = getattr(self, "_label_limit", 12)
+        for p in photos[:limit]:
             code = p["bbch_code"]
             row = LabelPhotoRow(
                 title=f"{p['variety_name']} · S{p['week_number']}",
@@ -885,9 +956,18 @@ class AILabScreen(MDScreen):
             row.ids.thumb_box.add_widget(thumb_widget(p["path"]))
             row.bind(on_release=lambda w: self.label_dialog(w, w.photo))
             box.add_widget(row)
+        if len(photos) > limit:
+            box.add_widget(MDFlatButton(
+                text=f"MOSTRAR MÁS ({len(photos) - limit} restantes)", pos_hint={"center_x": .5},
+                theme_text_color="Custom", text_color=c(theme.OLIVE_DARK),
+                on_release=lambda *_: self._more_labels()))
         if not photos:
             box.add_widget(MDLabel(text="No hay fotos de detalle en la temporada.",
                                    font_style="Caption", adaptive_height=True))
+
+    def _more_labels(self):
+        self._label_limit = getattr(self, "_label_limit", 12) + 12
+        self.refresh_label()
 
     def set_auto_learn(self, active: bool):
         app().db.set_setting("ai_auto_learn", bool(active))
@@ -938,7 +1018,7 @@ class AILabScreen(MDScreen):
                                     f"k-NN coseno (k={a.classifier.K}) + priors temporal, "
                                     f"cromático y textual · {sum(counts.values())} referencias")
         box = self.ids.counts
-        box.clear_widgets()
+        fast_clear(box)
         names = a.db.bbch_names()
         for code in sorted(counts):
             box.add_widget(OneLineListItem(text=f"{ph.bbch_label(code, names)} — {counts[code]}"))
