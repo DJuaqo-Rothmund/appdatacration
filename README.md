@@ -114,7 +114,7 @@ superior (o *Ajustes → Módulo de calibración*) pide el PIN **1234**.
 ```bash
 sudo apt update
 sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-venv autoconf libtool \
-    pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake build-essential \
+    pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake libltdl-dev build-essential \
     ccache lld
 python3 -m venv ~/bdenv && source ~/bdenv/bin/activate
 pip install --upgrade pip "cython<3.1" buildozer==1.6.0 setuptools
@@ -137,7 +137,7 @@ buildozer android deploy run logcat | grep -iE "python|fenorubus"
 # Celda 1: dependencias del sistema
 !sudo apt-get update -qq
 !sudo apt-get install -y -qq openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev \
-    libncurses-dev cmake libffi-dev libssl-dev automake zip unzip lld > /dev/null
+    libncurses-dev cmake libffi-dev libssl-dev automake libltdl-dev zip unzip lld > /dev/null
 !pip install -q "cython<3.1" buildozer==1.6.0 setuptools
 ```
 

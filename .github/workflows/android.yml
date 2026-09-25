@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq git zip unzip autoconf libtool pkg-config zlib1g-dev \
-            libncurses-dev cmake libffi-dev libssl-dev automake build-essential ccache lld
+            libncurses-dev cmake libffi-dev libssl-dev automake libltdl-dev build-essential ccache lld
       - name: Buildozer
         run: pip install "cython<3.1" buildozer==1.6.0 setuptools
       - name: Caché de SDK/NDK y compilaciones
