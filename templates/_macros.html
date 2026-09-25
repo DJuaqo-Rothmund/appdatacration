@@ -1,0 +1,45 @@
+{# Macros compartidos por los informes #}
+{% macro bbch_chip(code) -%}
+{% if code is not none -%}
+<span class="chip" title="{{ macro_name(code) }}"><span class="sw" style="background: {{ macro_color(code) }}"></span>{{ code|bbch }}</span>
+{%- else -%}
+<span class="chip empty">Sin estado registrado</span>
+{%- endif %}
+{%- endmacro %}
+
+{% macro photo(src, caption) -%}
+<figure>
+  {% if src %}<img src="{{ src }}" alt="{{ caption }}" loading="lazy">{% else %}<div class="nophoto">Sin foto</div>{% endif %}
+  <figcaption>{{ caption }}</figcaption>
+</figure>
+{%- endmacro %}
+
+{% macro ai_line(item) -%}
+{% if item.ai_code is not none %}
+<div class="ai">Sugerencia IA: <strong>BBCH {{ '%02d'|format(item.ai_code) }}</strong>
+  {% if item.ai_conf is not none %}({{ (item.ai_conf * 100)|round|int }} % conf.){% endif %}
+  {% if item.ai_accepted == 1 %}<span class="tag">aceptada</span>{% elif item.ai_accepted == 0 %}<span class="tag">corregida</span>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro heatmap(heat, weeks) -%}
+<div class="scroll-x">
+<table class="heat">
+  <thead><tr><th class="name">Variedad</th>
+  {% for w in weeks %}<th class="w" title="{{ w.label }}">S{{ w.week_number }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in heat %}
+  <tr><td class="name">{{ r.variety.name }}</td>
+    {% for c in r.cells %}
+      {% if c.code is not none %}{% set col = c.code|seq %}
+      <td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ r.variety.name }} · Semana {{ c.week.week_number }} ({{ c.week.label }}) · {{ c.code|bbch }}">{{ '%02d'|format(c.code) }}</td>
+      {% else %}<td class="c na" title="{{ r.variety.name }} · Semana {{ c.week.week_number }} · sin registro">·</td>{% endif %}
+    {% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<div class="legend-seq"><span>BBCH 00</span><span class="bar"></span><span>BBCH 99</span><span>· celda = código BBCH registrado; «·» = sin registro</span></div>
+{%- endmacro %}

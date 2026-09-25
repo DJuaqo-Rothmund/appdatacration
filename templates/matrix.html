@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bbch_chip, heatmap %}
+{% block meta %}<span>{{ rows|length }} variedades</span><span>{{ weeks|length }} semanas</span>{% endblock %}
+{% block content %}
+<h2>Matriz fenológica</h2>
+<p class="lead">Estado BBCH por variedad (filas) y semana de muestreo (columnas).</p>
+{{ heatmap(heat, weeks) }}
+
+<h2>Precocidad relativa</h2>
+<p class="lead">Diferencia media, en unidades BBCH, entre cada variedad y el promedio de todas las variedades en las mismas semanas. Valores positivos = adelantada; negativos = tardía.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>#</th><th>Variedad</th><th>Δ BBCH vs. promedio</th><th>Último estado</th><th>Trayectoria</th></tr></thead>
+  <tbody>
+  {% for r in ranking %}
+  {% set pct = (r.delta|abs / max_abs * 50) %}
+  <tr>
+    <td class="muted">{{ loop.index }}</td>
+    <td><strong>{{ r.variety.name }}</strong></td>
+    <td>
+      <div class="delta" title="{{ '%+.1f'|format(r.delta) }} unidades BBCH">
+        <div class="track"><span class="mid"></span>
+          {% if r.delta >= 0 %}<span class="fill" style="left:50%; width:{{ pct }}%; background: var(--pos)"></span>
+          {% else %}<span class="fill" style="right:50%; width:{{ pct }}%; background: var(--neg)"></span>{% endif %}
+        </div>
+        <span class="val">{{ '%+.1f'|format(r.delta) }}</span>
+      </div>
+    </td>
+    <td>{{ bbch_chip(r.last) }}</td>
+    <td>{{ r.spark|safe }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Se necesitan al menos dos variedades registradas en una misma semana.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Hitos fenológicos</h2>
+<p class="lead">Primera semana en que cada variedad alcanzó (o superó) el estado indicado.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Variedad</th>{% for code, name in milestones %}<th>{{ name }}<br><span class="mono">≥{{ code }}</span></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr><td><strong>{{ r.variety.name }}</strong></td>
+    {% for h in r.hits %}<td>{% if h %}S{{ h }}{% else %}<span class="muted">—</span>{% endif %}</td>{% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Galería paralela (fotos de detalle)</h2>
+<div class="scroll-x" style="padding: 10px;">
+<table>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td style="white-space:nowrap; font-weight:600; position:sticky; left:0; background:var(--paper);">{{ r.variety.name }}</td>
+    <td>
+      <div class="gal">
+      {% for g in r.gallery %}
+        <div title="{{ r.variety.name }} · Semana {{ g.week.week_number }}{% if g.code is not none %} · BBCH {{ g.code }}{% endif %}">
+          {% if g.src %}<img src="{{ g.src }}" alt="" loading="lazy">{% else %}<div class="nophoto">—</div>{% endif %}
+          <div class="cap">S{{ g.week.week_number }}{% if g.code is not none %} · {{ '%02d'|format(g.code) }}{% endif %}</div>
+        </div>
+      {% endfor %}
+      </div>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<script type="application/json" id="datos-bbch">{{ data_json|safe }}</script>
+{% endblock %}

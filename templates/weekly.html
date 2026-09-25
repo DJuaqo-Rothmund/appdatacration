@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bbch_chip, photo, ai_line %}
+{% block meta %}<span>{{ stats.done }}/{{ stats.varieties }} variedades con estado BBCH</span><span>{{ stats.photos }} fotos</span>{% endblock %}
+{% block content %}
+<h2>Resumen inter-varietal</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Variedad</th><th>Estado fenológico</th><th>Estadio principal</th><th>Fotos</th><th>IA</th></tr></thead>
+  <tbody>
+  {% for c in cards %}
+  <tr>
+    <td><strong>{{ c.variety.name }}</strong></td>
+    <td>{{ bbch_chip(c.code) }}</td>
+    <td class="muted">{{ macro_name(c.code) if c.code is not none else '—' }}</td>
+    <td>{{ (1 if c.img.canopy else 0) + (1 if c.img.detail else 0) }}/2</td>
+    <td class="small muted">{% if c.ai_code is not none %}BBCH {{ '%02d'|format(c.ai_code) }}{% if c.ai_accepted == 1 %} ✓{% elif c.ai_accepted == 0 %} → corregida{% endif %}{% else %}—{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Registro fotográfico por variedad</h2>
+<p class="lead">Foto general de canopia y foto de detalle lado a lado, con el estado fenológico asignado y las observaciones técnicas del evaluador.</p>
+<div class="grid-cards">
+{% for c in cards %}
+  <article class="card vcard">
+    <div class="head">
+      <h3>{{ c.variety.name }}</h3>
+      {% if c.variety.code %}<span class="vcode">{{ c.variety.code }}</span>{% endif %}
+    </div>
+    <div class="photos">
+      {{ photo(c.img.canopy, "Canopia") }}
+      {{ photo(c.img.detail, "Detalle") }}
+    </div>
+    <div>{{ bbch_chip(c.code) }}</div>
+    {{ ai_line(c) }}
+    {% if c.notes %}<div class="notes">{{ c.notes }}</div>{% endif %}
+  </article>
+{% endfor %}
+</div>
+{% endblock %}

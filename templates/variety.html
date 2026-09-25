@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bbch_chip, photo, ai_line %}
+{% block meta %}{% if variety.code %}<span>Código: {{ variety.code }}</span>{% endif %}<span>{{ timeline|length }} semanas registradas</span>{% endblock %}
+{% block content %}
+<h2>Parámetros biométricos y productivos</h2>
+<div class="stats">
+  <div class="card stat"><div><span class="v">{{ metrics.historical_yield|num }}</span><span class="u">{{ metrics.historical_yield_unit }}</span></div><div class="l">Rendimiento histórico</div></div>
+  <div class="card stat"><div><span class="v">{{ metrics.projected_yield|num }}</span><span class="u">{{ metrics.projected_yield_unit }}</span></div><div class="l">Proyección temporada</div></div>
+  <div class="card stat"><div><span class="v">{{ metrics.basal_canes|num }}</span><span class="u">{{ metrics.basal_canes_unit }}</span></div><div class="l">Cañas basales</div></div>
+  <div class="card stat"><div><span class="v">{{ metrics.laterals|num }}</span><span class="u">{{ metrics.laterals_unit }}</span></div><div class="l">Laterales reproductivos</div></div>
+</div>
+{% if metrics.historical_note %}<p class="small muted">Nota rendimiento histórico: {{ metrics.historical_note }}</p>{% endif %}
+{% if custom %}
+<div class="scroll-x" style="margin-top: 10px;">
+<table>
+  <thead><tr><th>Parámetro adicional</th><th>Valor</th><th>Unidad</th></tr></thead>
+  <tbody>{% for f in custom %}<tr><td>{{ f.key }}</td><td class="mono">{{ f.value }}</td><td class="muted">{{ f.unit }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>Progresión fenológica</h2>
+{% if chart %}
+<div class="card" style="padding: 12px;">{{ chart|safe }}</div>
+<div class="scroll-x" style="margin-top: 12px;">
+<table>
+  <thead><tr>{% for m in milestones %}<th>{{ m.name }} (≥{{ m.code }})</th>{% endfor %}</tr></thead>
+  <tbody><tr>{% for m in milestones %}<td>{% if m.week %}Semana {{ m.week }}{% else %}<span class="muted">—</span>{% endif %}</td>{% endfor %}</tr></tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">Aún no hay estados BBCH registrados para esta variedad.</p>
+{% endif %}
+
+<h2>Timeline de brotación a cosecha</h2>
+<div class="timeline">
+{% for t in timeline %}
+  <div class="tl-item">
+    <div class="when">Semana {{ t.week_number }} · {{ t.week_label }}</div>
+    <div class="card tl-body">
+      <div class="photos">
+        {{ photo(t.img.canopy, "Canopia") }}
+        {{ photo(t.img.detail, "Detalle") }}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div>{{ bbch_chip(t.code) }}</div>
+        {% if t.code is not none %}<div class="small muted">{{ macro_name(t.code) }}</div>{% endif %}
+        {{ ai_line(t) }}
+        {% if t.notes %}<div class="notes">{{ t.notes }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+{% else %}
+  <p class="muted">Sin registros.</p>
+{% endfor %}
+</div>
+{% endblock %}
