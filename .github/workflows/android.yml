@@ -39,16 +39,22 @@ jobs:
             libncurses-dev cmake libffi-dev libssl-dev automake libltdl-dev build-essential ccache lld
       - name: Buildozer
         run: pip install "cython<3.1" buildozer==1.6.0 setuptools
-      - name: Caché de SDK/NDK y compilaciones
-        uses: actions/cache@v4
+      # Solo se cachea el SDK/NDK (~/.buildozer), no las compilaciones del proyecto,
+      # para no arrastrar estados rotos entre ejecuciones. Se guarda aunque falle.
+      - name: Restaurar caché de SDK/NDK
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-${{ runner.os }}-
+          path: ~/.buildozer
+          key: buildozer-sdk-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: buildozer-sdk-${{ runner.os }}-
       - name: Compilar APK (debug)
         run: yes | buildozer -v android debug
+      - name: Guardar caché de SDK/NDK
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-sdk-${{ runner.os }}-${{ github.run_id }}
       - name: Publicar APK
         uses: actions/upload-artifact@v4
         with:

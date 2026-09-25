@@ -73,7 +73,11 @@ android.minapi = 26
 android.accept_sdk_license = True
 
 # (list) The Android archs to build for
-android.archs = arm64-v8a, armeabi-v7a
+# Solo arm64-v8a (teléfonos de 64 bits, prácticamente todos desde 2017).
+# Compilar dos arquitecturas en una misma pasada rompe el entorno virtual de pip
+# de python-for-android (reutiliza «venv» y mezcla dos versiones de pip).
+# Para teléfonos antiguos de 32 bits, compilar aparte con: android.archs = armeabi-v7a
+android.archs = arm64-v8a
 
 # (bool) Enable AndroidX support
 android.enable_androidx = True

@@ -121,7 +121,7 @@ pip install --upgrade pip "cython<3.1" buildozer==1.6.0 setuptools
 
 cd fenorubus
 buildozer -v android debug          # 1ª vez: 20-40 min (descarga SDK/NDK y compila numpy/pillow)
-# resultado: bin/fenorubus-1.0.0-arm64-v8a_armeabi-v7a-debug.apk
+# resultado: bin/fenorubus-1.0.0-arm64-v8a-debug.apk  (teléfonos de 64 bits)
 ```
 
 Instalar en un teléfono conectado por USB (con depuración USB activada):
