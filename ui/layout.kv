@@ -376,7 +376,8 @@
                 spacing: dp(8)
     MDFloatingActionButton:
         icon: "plus"
-        md_bg_color: c(theme.LEAF)
+        elevation: 1
+        md_bg_color: c(theme.BERRY)
         pos_hint: {"right": .95, "y": .03}
         on_release: root.add_dialog()
 
@@ -592,6 +593,8 @@
                         pos_hint: {"center_y": .5}
                     MDSwitch:
                         id: enabled
+                        thumb_color_active: c(theme.BERRY)
+                        track_color_active: c(theme.BERRY_LIGHT, .6)
                         pos_hint: {"center_y": .5}
                         on_active: root.on_toggle(self.active)
                 MDBoxLayout:
@@ -1114,10 +1117,11 @@
 <SegButton>:
     size_hint_x: 1
     elevation: 0
-    md_bg_color: c(theme.LEAF) if self.selected else c(theme.GLASS)
+    rounded_button: True
+    md_bg_color: c(theme.BERRY) if self.selected else (1, 1, 1, .55)
     theme_text_color: "Custom"
     text_color: (1, 1, 1, 1) if self.selected else c(theme.LEAF_DARK)
-    line_color: c(theme.LINE)
+    line_color: c(theme.GLASS_EDGE)
 
 <AILabScreen>:
     md_bg_color: 0, 0, 0, 0
@@ -1192,6 +1196,8 @@
                                     pos_hint: {"center_y": .5}
                                 MDSwitch:
                                     id: auto_learn
+                                    thumb_color_active: c(theme.BERRY)
+                                    track_color_active: c(theme.BERRY_LIGHT, .6)
                                     pos_hint: {"center_y": .5}
                                     on_active: root.set_auto_learn(self.active)
                             GhostButton:
