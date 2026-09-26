@@ -157,7 +157,7 @@ def notify(title: str, message: str) -> None:
         return
     try:
         from plyer import notification  # type: ignore
-        notification.notify(title=title, message=message, app_name="FenoRubus", timeout=10)
+        notification.notify(title=title, message=message, app_name="PhenoRubus", timeout=10)
     except Exception:
         print(f"[recordatorio] {title}: {message}")
 
@@ -166,7 +166,7 @@ def _pending_intent(ctx):
     from jnius import autoclass  # type: ignore
     PendingIntent = autoclass("android.app.PendingIntent")
     Service = autoclass(SERVICE_CLASS)
-    intent = Service.getDefaultIntent(ctx, "", "FenoRubus", "Recordatorio de muestreo", "alarm")
+    intent = Service.getDefaultIntent(ctx, "", "PhenoRubus", "Recordatorio de muestreo", "alarm")
     flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
     if android_api_level() >= 26:
         return PendingIntent.getForegroundService(ctx, REQUEST_CODE, intent, flags)

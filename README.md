@@ -1,4 +1,6 @@
-# FenoRubus · Cuaderno de campo digital para frambueso (*Rubus idaeus*)
+# PhenoRubus · Cuaderno de campo digital para frambueso (*Rubus idaeus*)
+
+*By DJuaqo, potenciado con Claude AI.*
 
 Aplicación Android (Python + Kivy/KivyMD) para el **seguimiento fenológico y biométrico de ensayos
 varietales de frambueso**, pensada para trabajar en terreno **sin conexión** (offline-first):

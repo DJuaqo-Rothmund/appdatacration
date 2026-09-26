@@ -11,7 +11,9 @@ import re
 import sys
 import unicodedata
 
-APP_NAME = "FenoRubus"
+APP_NAME = "PhenoRubus"
+# Carpeta de datos en escritorio: se conserva el nombre original para no «perder» datos.
+DATA_DIR_NAME = "FenoRubus"
 APP_SLUG = "fenorubus"
 
 
@@ -56,9 +58,9 @@ def get_data_dir() -> str:
     elif IS_ANDROID:
         path = android_context().getFilesDir().getAbsolutePath()
     elif sys.platform.startswith("win"):
-        path = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
+        path = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), DATA_DIR_NAME)
     elif sys.platform == "darwin":
-        path = os.path.expanduser(f"~/Library/Application Support/{APP_NAME}")
+        path = os.path.expanduser(f"~/Library/Application Support/{DATA_DIR_NAME}")
     else:
         base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
         path = os.path.join(base, APP_SLUG)

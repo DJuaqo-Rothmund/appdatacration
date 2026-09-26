@@ -1,7 +1,7 @@
 [app]
 
 # (str) Title of your application
-title = FenoRubus
+title = PhenoRubus
 
 # (str) Package name / domain  ->  org.rubus.fenorubus
 # (notifications.SERVICE_CLASS depende de este nombre: org.rubus.fenorubus.ServiceReminder)

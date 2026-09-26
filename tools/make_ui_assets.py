@@ -180,41 +180,53 @@ def make_background(w=720, h=1280):
     base.save(os.path.join(OUT, "background.jpg"), quality=90)
 
 
-# ---------------------------------------------------------------- icono app
-def make_app_icon(size=512):
-    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    grad = Image.new("RGB", (size, size))
-    a, b = (30, 74, 58), (168, 24, 66)
-    for y in range(size):
-        for_t = y / (size - 1)
-        grad.paste(tuple(int(p + (q - p) * for_t) for p, q in zip(a, b)), (0, y, size, y + 1))
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size - 1, size - 1], radius=size * .23, fill=255)
-    tile.paste(grad, (0, 0), mask)
-    pen = Pen(size, (255, 255, 255), (170, 222, 160), (255, 255, 255, 60), width=.03)
-    raspberry(pen)
-    glyph = pen.result(int(size * .78))
-    off = (size - glyph.width) // 2
-    tile.alpha_composite(glyph, (off, off + int(size * .02)))
-    tile.save(os.path.join(ROOT, "assets", "icon.png"))
-    return tile
+# ---------------------------------------------------------------- logo / icono
+LOGO_SRC = os.path.join(ROOT, "assets", "logo_source.png")
+APP_TITLE = "PhenoRubus"
+BYLINE = "By DJuaqo, potenciado con Claude AI"
 
 
-def make_presplash(icon):
-    w, h = 1080, 1920
-    bg = Image.open(os.path.join(OUT, "background.jpg")).resize((w, h)).convert("RGBA")
-    ic = icon.resize((380, 380), Image.LANCZOS)
-    bg.alpha_composite(ic, ((w - 380) // 2, 640))
-    d = ImageDraw.Draw(bg)
+def load_logo(size: int) -> Image.Image:
+    """Logo oficial (frambuesa-reloj con ciclo fenológico) centrado en un cuadrado."""
+    src = Image.open(LOGO_SRC).convert("RGBA")
+    src = src.crop(src.getbbox())
+    side = max(src.size)
+    sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    sq.paste(src, ((side - src.width) // 2, (side - src.height) // 2), src)
+    return sq.resize((size, size), Image.LANCZOS)
+
+
+def make_logo_assets():
+    load_logo(512).save(os.path.join(OUT, "logo.png"))           # pantalla de inicio
+    icon = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    logo = load_logo(472)
+    icon.alpha_composite(logo, ((512 - 472) // 2, (512 - 472) // 2))
+    icon.save(os.path.join(ROOT, "assets", "icon.png"))
+
+
+def _fonts():
     fonts = os.path.join(os.path.dirname(__import__("kivy").__file__), "data", "fonts")
     try:
-        f1 = ImageFont.truetype(os.path.join(fonts, "Roboto-Bold.ttf"), 92)
-        f2 = ImageFont.truetype(os.path.join(fonts, "Roboto-Regular.ttf"), 40)
+        return (ImageFont.truetype(os.path.join(fonts, "Roboto-Bold.ttf"), 86),
+                ImageFont.truetype(os.path.join(fonts, "Roboto-Regular.ttf"), 34))
     except OSError:
-        f1 = f2 = None
-    d.text((w // 2, 1130), "FenoRubus", fill=(30, 74, 58), anchor="mm", font=f1)
-    d.text((w // 2, 1215), "Fenología y biometría · Rubus idaeus", fill=(168, 24, 66),
-           anchor="mm", font=f2)
+        return None, None
+
+
+def make_presplash():
+    """Igual a la pantalla de inicio de la app, para una transición imperceptible."""
+    w, h = 1080, 1920
+    bg = Image.open(os.path.join(OUT, "background.jpg")).resize((w, h)).convert("RGBA")
+    # Mismas proporciones que <SplashScreen> (layout.kv): logo 62 % del ancho centrado
+    # al 60 % de la altura, nombre al 33,5 % y firma al pie.
+    side = int(w * .62)
+    logo = load_logo(side)
+    cy = int(h * (1 - .60))
+    bg.alpha_composite(logo, ((w - side) // 2, cy - side // 2))
+    d = ImageDraw.Draw(bg)
+    f1, f2 = _fonts()
+    d.text((w // 2, int(h * (1 - .335))), APP_TITLE, fill=(30, 74, 58), anchor="mm", font=f1)
+    d.text((w // 2, int(h * (1 - .04)) - 40), BYLINE, fill=(110, 126, 117), anchor="mm", font=f2)
     bg.convert("RGB").save(os.path.join(ROOT, "assets", "presplash.png"))
 
 
@@ -222,5 +234,6 @@ if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     make_icons()
     make_background()
-    make_presplash(make_app_icon())
+    make_logo_assets()
+    make_presplash()
     print("Recursos generados en", OUT)

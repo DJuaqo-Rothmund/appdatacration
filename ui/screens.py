@@ -202,6 +202,18 @@ class NavTile(ButtonBehavior, BoxLayout):
 # ===========================================================================
 # Home
 # ===========================================================================
+class SplashScreen(MDScreen):
+    """Pantalla de inicio: logo, nombre y firma (idéntica al presplash de Android)."""
+
+    def animate_in(self):
+        from kivy.animation import Animation
+        logo = self.ids.logo
+        logo.opacity, logo.size_hint = 0, (.5, .5)
+        Animation(opacity=1, size_hint=(.62, .62), d=.7, t="out_back").start(logo)
+        Animation(opacity=1, d=.6, t="out_quad").start(self.ids.name)
+        Animation(opacity=1, d=1.0, t="in_quad").start(self.ids.byline)
+
+
 class HomeScreen(MDScreen):
     TITLES = {"sampling": "Muestreo semanal", "varieties": "Variedades en ensayo",
               "reports": "Informes", "preview": "Vista previa"}

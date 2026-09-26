@@ -1,5 +1,5 @@
 """
-FenoRubus — Cuaderno de campo digital para el seguimiento fenológico y
+PhenoRubus — Cuaderno de campo digital para el seguimiento fenológico y
 biométrico de ensayos en frambueso (Rubus idaeus).
 
 Punto de entrada y navegación KivyMD.
@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 
@@ -46,13 +47,14 @@ from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, resource_path  # noqa: E402
 from ui.screens import (AILabScreen, HomeScreen, ObservationScreen, PinForm,  # noqa: E402
-                        SettingsScreen, VarietyScreen, form_dialog)
+                        SettingsScreen, SplashScreen, VarietyScreen, form_dialog)
 
 MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3"}
 
 
 class FenoRubusApp(MDApp):
-    title = "FenoRubus"
+    title = "PhenoRubus"
+    SPLASH_MIN_S = 1.6  # tiempo mínimo visible de la pantalla de inicio
 
     # ------------------------------------------------------------ build
     def build(self):
@@ -71,8 +73,10 @@ class FenoRubusApp(MDApp):
         Builder.load_file(resource_path("ui", "layout.kv"))
         # Fundido corto: con pantallas translúcidas un deslizamiento superpondría contenidos.
         self.sm = MDScreenManager(transition=FadeTransition(duration=0.14))
-        self.home = HomeScreen(name="home")
-        self.sm.add_widget(self.home)  # el resto de pantallas se crea al primer uso
+        # Primero solo la pantalla de inicio (logo): el primer cuadro aparece de inmediato
+        # y la pantalla principal se construye detrás, en on_start.
+        self.sm.add_widget(SplashScreen(name="splash"))
+        self.home = None
         Window.bind(on_keyboard=self._on_keyboard)
         Window.clearcolor = theme.c("#F3F7F2")
         # Fondo difuminado verde/frambuesa detrás de todas las pantallas translúcidas.
@@ -119,16 +123,33 @@ class FenoRubusApp(MDApp):
         return self._screen(SettingsScreen, "settings")
 
     def on_start(self):
+        self._t_start = time.monotonic()
+        self.sm.get_screen("splash").animate_in()
+        Clock.schedule_once(self._boot, 0.15)  # deja pintar el logo antes de trabajar
+
+    def _boot(self, *_):
+        self.home = HomeScreen(name="home")  # el resto de pantallas se crea al primer uso
+        self.sm.add_widget(self.home)
         self.home.refresh_current()
-        # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
-        Clock.schedule_once(lambda *_: self.observation, 2.5)
+        wait = max(0.0, self.SPLASH_MIN_S - (time.monotonic() - self._t_start))
+        Clock.schedule_once(self._leave_splash, wait)
+
+    def _leave_splash(self, *_):
+        self.sm.transition = FadeTransition(duration=0.35)
+        self.sm.current = "home"
+        self.sm.transition = FadeTransition(duration=0.14)
+        # Libera la pantalla de inicio (y su textura) cuando termina el fundido.
+        Clock.schedule_once(lambda *_: self.sm.remove_widget(self.sm.get_screen("splash")), 0.6)
         request_runtime_permissions()
         self.reminders.apply()
         Clock.schedule_interval(lambda *_: self._check_reminder(), 60)
+        # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
+        Clock.schedule_once(lambda *_: self.observation, 2.5)
 
     def on_resume(self):
         self.week = self.db.current_week() if self.week is None else self.week
-        self.refresh_home()
+        if self.home is not None:
+            self.refresh_home()
 
     def on_stop(self):
         self.workers.shutdown(wait=False)

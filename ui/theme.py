@@ -31,6 +31,7 @@ LINE = "#1E4A3A2E"        # líneas finas verdes translúcidas
 CLEAR = "#00000000"
 
 BACKGROUND = resource_path("assets", "ui", "background.jpg")
+LOGO = resource_path("assets", "ui", "logo.png")
 
 
 def nav_icon(name: str, active: bool) -> str:

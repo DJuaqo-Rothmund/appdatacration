@@ -168,6 +168,47 @@
             width: dp(1.1)
 
 # ---------------------------------------------------------------------------
+# Pantalla de inicio
+# ---------------------------------------------------------------------------
+<SplashScreen>:
+    md_bg_color: 0, 0, 0, 0
+    FloatLayout:
+        AnchorLayout:
+            anchor_y: "center"
+            size_hint: 1, None
+            height: root.height * .5
+            pos_hint: {"center_x": .5, "center_y": .6}
+            Image:
+                id: logo
+                source: theme.LOGO
+                size_hint: .62, .62
+                fit_mode: "contain"
+                mipmap: True
+        MDLabel:
+            id: name
+            text: "PhenoRubus"
+            opacity: 0
+            halign: "center"
+            font_style: "H4"
+            bold: True
+            theme_text_color: "Custom"
+            text_color: c(theme.LEAF_DARK)
+            size_hint: 1, None
+            height: dp(56)
+            pos_hint: {"center_x": .5, "center_y": .335}
+        MDLabel:
+            id: byline
+            text: "By DJuaqo, potenciado con Claude AI"
+            opacity: 0
+            halign: "center"
+            font_style: "Caption"
+            theme_text_color: "Custom"
+            text_color: c(theme.MUTED)
+            size_hint: 1, None
+            height: dp(24)
+            pos_hint: {"center_x": .5, "y": .04}
+
+# ---------------------------------------------------------------------------
 # Home + pestañas
 # ---------------------------------------------------------------------------
 <HomeScreen>:

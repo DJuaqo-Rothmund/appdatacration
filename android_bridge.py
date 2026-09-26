@@ -5,11 +5,11 @@ Acceso a hardware y almacenamiento nativo de Android con Pyjnius, con
 alternativas de escritorio para desarrollo en PC.
 
 * Cámara: ``ACTION_IMAGE_CAPTURE`` escribiendo en un URI de MediaStore
-  (Pictures/FenoRubus). No necesita FileProvider y deja un respaldo en la
+  (Imágenes de Fenología). No necesita FileProvider y deja un respaldo en la
   galería del teléfono; luego se copia al almacenamiento privado de la app.
 * Galería: Photo Picker del sistema (Android 13+) o ``ACTION_GET_CONTENT``.
 * Documentos (PDF/TXT) para el módulo de calibración: ``ACTION_OPEN_DOCUMENT``.
-* Compartir informes: se copian a Descargas/FenoRubus vía MediaStore y se
+* Compartir informes: se copian a Descargas/PhenoRubus vía MediaStore y se
   lanza ``ACTION_SEND`` (WhatsApp, correo, Drive...) o ``ACTION_VIEW``.
 """
 from __future__ import annotations
@@ -164,7 +164,7 @@ class AndroidMedia:
         from jnius import autoclass, cast  # type: ignore
         values = self.ContentValues()
         stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
-        name = f"{name_hint}_{stamp}.jpg" if name_hint else f"FenoRubus_{stamp}.jpg"
+        name = f"{name_hint}_{stamp}.jpg" if name_hint else f"PhenoRubus_{stamp}.jpg"
         values.put(self.MediaColumns.DISPLAY_NAME, name)
         values.put(self.MediaColumns.MIME_TYPE, "image/jpeg")
         if self.api >= 29:
@@ -241,7 +241,7 @@ class AndroidMedia:
 
     # --------------------------------------------------- exportar/compartir
     def export_to_downloads(self, path: str, mime: str):
-        """Copia el archivo a Descargas/FenoRubus y devuelve su content:// URI."""
+        """Copia el archivo a Descargas/PhenoRubus y devuelve su content:// URI."""
         from jnius import autoclass  # type: ignore
         name = os.path.basename(path)
         if self.api >= 29:
@@ -422,7 +422,7 @@ class DesktopMedia:
                 folder = os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)
                 os.makedirs(folder, exist_ok=True)
                 stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
-                shutil.copyfile(path, os.path.join(folder, f"{name_hint or 'FenoRubus'}_{stamp}.jpg"))
+                shutil.copyfile(path, os.path.join(folder, f"{name_hint or 'PhenoRubus'}_{stamp}.jpg"))
             callback(path, "camera")
         self.file_chooser(chosen, (".jpg", ".jpeg", ".png"))
 
