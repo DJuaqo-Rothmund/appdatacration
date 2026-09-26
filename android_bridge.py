@@ -25,6 +25,10 @@ from PIL import Image, ImageOps
 
 from platform_utils import APP_NAME, IS_ANDROID, android_api_level
 
+# Carpeta pública (Imágenes › Imágenes de Fenología): visible en la galería y
+# respaldable con Google Fotos («Fotos del dispositivo»).
+PUBLIC_PHOTO_DIR = "Imágenes de Fenología"
+
 RC_CAMERA = 0x4631
 RC_GALLERY = 0x4632
 RC_DOCUMENT = 0x4633
@@ -155,14 +159,22 @@ class AndroidMedia:
         Clock.schedule_once(lambda _dt: callback(*args), 0)
 
     # ---------------------------------------------------------- cámara
-    def take_photo(self, callback: PhotoCallback) -> None:
-        from jnius import cast  # type: ignore
+    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None) -> None:
+        """La cámara escribe la foto original directamente en «Imágenes de Fenología»."""
+        from jnius import autoclass, cast  # type: ignore
         values = self.ContentValues()
-        name = f"FenoRubus_{_dt.datetime.now():%Y%m%d_%H%M%S}.jpg"
+        stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
+        name = f"{name_hint}_{stamp}.jpg" if name_hint else f"FenoRubus_{stamp}.jpg"
         values.put(self.MediaColumns.DISPLAY_NAME, name)
         values.put(self.MediaColumns.MIME_TYPE, "image/jpeg")
         if self.api >= 29:
-            values.put(self.MediaColumns.RELATIVE_PATH, f"Pictures/{APP_NAME}")
+            values.put(self.MediaColumns.RELATIVE_PATH, f"Pictures/{PUBLIC_PHOTO_DIR}")
+        else:  # Android 8-9: ruta explícita (requiere WRITE_EXTERNAL_STORAGE)
+            Environment = autoclass("android.os.Environment")
+            folder = os.path.join(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_PICTURES).getAbsolutePath(), PUBLIC_PHOTO_DIR)
+            os.makedirs(folder, exist_ok=True)
+            values.put(self.MediaColumns.DATA, os.path.join(folder, name))
         uri = self.resolver.insert(self.ImagesMedia.EXTERNAL_CONTENT_URI, values)
         intent = self.Intent(self.MediaStore.ACTION_IMAGE_CAPTURE)
         intent.putExtra(self.MediaStore.EXTRA_OUTPUT, cast("android.os.Parcelable", uri))
@@ -270,12 +282,127 @@ class AndroidMedia:
         chooser = self.Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
         self.activity.startActivity(chooser)
 
+    def preview(self, path: str, title: str = "Vista previa") -> None:
+        if not hasattr(self, "_web"):
+            self._web = AndroidWebPreview()
+        self._web.open(path, title)
+
+    def close_preview(self) -> bool:
+        web = getattr(self, "_web", None)
+        if web is not None and web.is_open:
+            web.close()
+            return True
+        return False
+
     def open(self, path: str, mime: str) -> None:
         uri = self.export_to_downloads(path, mime)
         intent = self.Intent(self.Intent.ACTION_VIEW)
         intent.setDataAndType(uri, mime)
         intent.addFlags(self.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         self.activity.startActivity(intent)
+
+
+# ===========================================================================
+# Vista previa de informes dentro de la app (Android WebView)
+# ===========================================================================
+class AndroidWebPreview:
+    """
+    WebView nativo superpuesto a la ventana de Kivy, con una barra «Cerrar».
+    Muestra el HTML local sin enviarlo ni copiarlo a Descargas.
+    """
+
+    def __init__(self):
+        self.layout = None
+        self.webview = None
+        self._click = None  # referencia viva al listener Java (evita que el GC lo libere)
+
+    @property
+    def is_open(self) -> bool:
+        return self.layout is not None
+
+    def open(self, path: str, title: str = "Vista previa") -> None:
+        from android.runnable import run_on_ui_thread  # type: ignore
+
+        @run_on_ui_thread
+        def _open():
+            from jnius import autoclass, cast  # type: ignore
+            activity = autoclass("org.kivy.android.PythonActivity").mActivity
+            WebView = autoclass("android.webkit.WebView")
+            WebViewClient = autoclass("android.webkit.WebViewClient")
+            LinearLayout = autoclass("android.widget.LinearLayout")
+            LLParams = autoclass("android.widget.LinearLayout$LayoutParams")
+            VGParams = autoclass("android.view.ViewGroup$LayoutParams")
+            Button = autoclass("android.widget.Button")
+            TextView = autoclass("android.widget.TextView")
+            Color = autoclass("android.graphics.Color")
+            String = autoclass("java.lang.String")
+
+            if self.layout is not None:
+                self._close_now()
+            root = LinearLayout(activity)
+            root.setOrientation(LinearLayout.VERTICAL)
+            root.setBackgroundColor(Color.parseColor("#F3F7F2"))
+            bar = LinearLayout(activity)
+            bar.setOrientation(LinearLayout.HORIZONTAL)
+            bar.setBackgroundColor(Color.parseColor("#1E4A3A"))
+            bar.setPadding(24, 12, 12, 12)
+            label = TextView(activity)
+            label.setText(cast("java.lang.CharSequence", String(title)))
+            label.setTextColor(Color.WHITE)
+            label.setTextSize(16.0)
+            bar.addView(label, LLParams(0, VGParams.WRAP_CONTENT, 1.0))
+            close = Button(activity)
+            close.setText(cast("java.lang.CharSequence", String("Cerrar")))
+            close.setOnClickListener(self._listener())
+            bar.addView(close, LLParams(VGParams.WRAP_CONTENT, VGParams.WRAP_CONTENT))
+            wv = WebView(activity)
+            st = wv.getSettings()
+            st.setJavaScriptEnabled(False)
+            st.setAllowFileAccess(True)
+            st.setBuiltInZoomControls(True)
+            st.setDisplayZoomControls(False)
+            st.setUseWideViewPort(True)
+            st.setLoadWithOverviewMode(True)
+            wv.setWebViewClient(WebViewClient())
+            root.addView(bar, LLParams(VGParams.MATCH_PARENT, VGParams.WRAP_CONTENT))
+            root.addView(wv, LLParams(VGParams.MATCH_PARENT, 0, 1.0))
+            activity.addContentView(root, VGParams(VGParams.MATCH_PARENT, VGParams.MATCH_PARENT))
+            wv.loadUrl("file://" + os.path.abspath(path))
+            self.layout, self.webview = root, wv
+
+        _open()
+
+    def _listener(self):
+        from jnius import PythonJavaClass, java_method  # type: ignore
+
+        preview = self
+
+        class ClickListener(PythonJavaClass):
+            __javainterfaces__ = ["android/view/View$OnClickListener"]
+            __javacontext__ = "app"
+
+            @java_method("(Landroid/view/View;)V")
+            def onClick(self, view):
+                preview._close_now()
+
+        self._click = ClickListener()
+        return self._click
+
+    def _close_now(self) -> None:
+        """Debe ejecutarse en el hilo de interfaz de Android."""
+        if self.layout is None:
+            return
+        from jnius import cast  # type: ignore
+        parent = self.layout.getParent()
+        if parent is not None:
+            cast("android.view.ViewGroup", parent).removeView(self.layout)
+        if self.webview is not None:
+            self.webview.destroy()
+        self.layout = self.webview = None
+
+    def close(self) -> None:
+        from android.runnable import run_on_ui_thread  # type: ignore
+        run_on_ui_thread(self._close_now)()
 
 
 # ===========================================================================
@@ -288,8 +415,16 @@ class DesktopMedia:
         self.tmp_dir = tmp_dir
         self.file_chooser = file_chooser
 
-    def take_photo(self, callback: PhotoCallback) -> None:
-        self.file_chooser(lambda p: callback(p, "camera"), (".jpg", ".jpeg", ".png"))
+    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None) -> None:
+        """En PC se elige un archivo y se copia a ~/Pictures/Imágenes de Fenología."""
+        def chosen(path):
+            if path:
+                folder = os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)
+                os.makedirs(folder, exist_ok=True)
+                stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
+                shutil.copyfile(path, os.path.join(folder, f"{name_hint or 'FenoRubus'}_{stamp}.jpg"))
+            callback(path, "camera")
+        self.file_chooser(chosen, (".jpg", ".jpeg", ".png"))
 
     def pick_image(self, callback: PhotoCallback) -> None:
         self.file_chooser(lambda p: callback(p, "gallery"), (".jpg", ".jpeg", ".png"))
@@ -300,6 +435,12 @@ class DesktopMedia:
 
     def share(self, path: str, mime: str, title: str = "") -> None:
         self.open(path, mime)
+
+    def preview(self, path: str, title: str = "") -> None:
+        self.open(path, "text/html")
+
+    def close_preview(self) -> bool:
+        return False
 
     def open(self, path: str, mime: str) -> None:
         webbrowser.open("file://" + os.path.abspath(path))

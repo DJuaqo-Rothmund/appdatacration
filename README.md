@@ -12,6 +12,17 @@ varietales de frambueso**, pensada para trabajar en terreno **sin conexión** (o
 * Catálogo dinámico de variedades con **parámetros biométricos** y campos personalizados.
 * **Recordatorios semanales** (viernes por defecto) con alarmas exactas de Android.
 * **Informes HTML autocontenidos** (imágenes en Base64) o **ZIP portátil**, listos para WhatsApp o correo.
+* **Vista previa de informes** dentro de la app (pestaña con el ojo): resumen de lo que se
+  mostrará (variedades, fotos, estados BBCH, datos faltantes, tamaño estimado) y visualización
+  completa en un WebView nativo, sin enviar ni copiar nada a Descargas.
+* **Semana de inicio configurable** (Ajustes): cualquier fecha como Semana 1; por defecto la
+  semana del 7 de septiembre, con botón para restablecerla.
+* **Fotos en el teléfono:** las tomadas con la cámara de la app quedan en
+  *Imágenes › Imágenes de Fenología* con nombres descriptivos (variedad, semana, tipo), listas
+  para respaldarse con Google Fotos (*Biblioteca › Fotos del dispositivo › activar copia*).
+* **Optimizada para gama media/baja:** tarjetas livianas (sin MDCard), pantallas y módulos
+  pesados (numpy, IA, Jinja2) cargados bajo demanda, fotos y miniaturas en segundo plano,
+  sin MSAA, SQLite en WAL/NORMAL.
 * Trazabilidad: bitácora de cambios (`audit_log`) y respaldo de la base SQLite.
 
 ---
@@ -30,10 +41,11 @@ phenology.py             Escala BBCH del frambueso, semanas de muestreo, calenda
 android_bridge.py        Cámara (MediaStore), galería (Photo Picker), documentos, compartir, permisos
 platform_utils.py        Detección de plataforma y rutas de datos (app y servicio)
 service/reminder_service.py   Servicio Android que publica el aviso y re-programa la alarma
-ui/layout.kv             Layout KivyMD (estética cuaderno de campo: oliva, pizarra, blanco hueso)
-ui/screens.py            Lógica de pantallas: Muestreo, Variedades, Informes, Ajustes,
-                         Registro (variedad × semana), Ficha de variedad, Calibración IA
-ui/theme.py              Paleta y tema
+ui/layout.kv             Layout KivyMD (estética frambuesa: verdes hoja + rojo fruto, tarjetas de vidrio)
+ui/screens.py            Lógica de pantallas: Muestreo, Variedades, Informes, Vista previa,
+                         Ajustes, Registro (variedad × semana), Ficha de variedad, Calibración IA
+ui/theme.py              Paleta frambuesa, vidrio y colores por estadio BBCH
+assets/ui/               Iconos de navegación y fondo (generados con tools/make_ui_assets.py)
 templates/*.html         Plantillas de informes (CSS responsivo, modo claro/oscuro, impresión)
 tools/demo_data.py       Datos de demostración con fotos sintéticas (pruebas en PC)
 tools/export_mobilenet_tflite.py   Exportador opcional de MobileNetV3-Small a TFLite
@@ -102,8 +114,9 @@ En escritorio no hay cámara integrada: los botones *Cámara* y *Galería* abren
 los informes se abren en el navegador y los recordatorios se muestran con Plyer mientras la app está abierta.
 
 **Recorrido sugerido:** Muestreo → tocar una variedad → subir la *Foto 2 · Detalle* → ver la sugerencia
-BBCH → Guardar. Luego *Informes* → *Matriz comparativa global* → HTML. El ícono 🧠 de la barra
-superior (o *Ajustes → Módulo de calibración*) pide el PIN **1234**.
+BBCH → Guardar. Luego *Vista previa* (ojo) → elegir el tipo de informe → revisar el resumen →
+*Ver vista previa completa*. El cerebro de la barra superior abre el entrenador de IA (PIN **1234**)
+y el engranaje, los Ajustes.
 
 ---
 

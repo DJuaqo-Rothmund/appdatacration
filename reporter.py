@@ -25,8 +25,6 @@ import datetime as _dt
 import io
 import json
 import os
-import re
-import unicodedata
 import zipfile
 from dataclasses import dataclass
 
@@ -34,16 +32,11 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from PIL import Image, ImageOps
 
 import phenology as ph
-from platform_utils import APP_NAME, resource_path
+from platform_utils import APP_NAME, resource_path, slugify
 
 PHOTO_KINDS = (("canopy", "Canopia / planta completa"), ("detail", "Detalle / macro"))
 MILESTONES = [(51, "Botón floral"), (61, "Inicio floración"), (65, "Plena floración"),
               (71, "Cuajado"), (81, "Pinta"), (87, "Cosecha")]
-
-
-def slugify(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower() or "informe"
 
 
 # ===========================================================================
@@ -67,17 +60,24 @@ def seq_color(code: int | None) -> tuple[str, str]:
 # Imágenes
 # ===========================================================================
 class ImageStore:
-    """Convierte fotos a data-URI (modo html) o archivos relativos (modo zip)."""
+    """
+    Convierte fotos a data-URI (modo html), archivos relativos (modo zip) o
+    miniaturas locales en caché referenciadas por file:// (modo preview: rápido
+    y con poca memoria, para la vista previa dentro de la app).
+    """
 
-    def __init__(self, package: str, max_side: int, quality: int):
+    def __init__(self, package: str, max_side: int, quality: int, cache_dir: str | None = None):
         self.package = package
+        self.cache_dir = cache_dir
         self.max_side = max_side
         self.quality = quality
         self.files: dict[str, bytes] = {}
         self._cache: dict[tuple[str, int], str] = {}
 
     def _encode(self, path: str, max_side: int) -> bytes:
-        img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+        img = Image.open(path)
+        img.draft("RGB", (max_side, max_side))  # decodificación JPEG reducida
+        img = ImageOps.exif_transpose(img).convert("RGB")
         img.thumbnail((max_side, max_side), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=self.quality, optimize=True, progressive=True)
@@ -92,6 +92,10 @@ class ImageStore:
             return self._cache[key]
         if self.package == "zip":
             side = max(side, 1600)
+        if self.package == "preview":
+            uri = self._preview_file(path, min(side, 720))
+            self._cache[key] = uri
+            return uri
         try:
             data = self._encode(path, side)
         except Exception:
@@ -104,6 +108,18 @@ class ImageStore:
             uri = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
         self._cache[key] = uri
         return uri
+
+    def _preview_file(self, path: str, side: int) -> str | None:
+        import hashlib
+        key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{side}".encode()).hexdigest()
+        dest = os.path.join(self.cache_dir, key + ".jpg")
+        if not os.path.exists(dest):
+            try:
+                with open(dest, "wb") as f:
+                    f.write(self._encode(path, side))
+            except Exception:
+                return None
+        return "file://" + os.path.abspath(dest)
 
 
 # ===========================================================================
@@ -166,10 +182,12 @@ class ReportResult:
 
 
 class ReportGenerator:
-    def __init__(self, db, out_dir: str):
+    def __init__(self, db, out_dir: str, preview_dir: str | None = None):
         self.db = db
         self.out_dir = out_dir
+        self.preview_dir = preview_dir or os.path.join(os.path.dirname(out_dir), "preview")
         os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(os.path.join(self.preview_dir, "img"), exist_ok=True)
         self.env = Environment(loader=FileSystemLoader(resource_path("templates")),
                                autoescape=select_autoescape(["html"]))
         self.env.filters["bbch"] = lambda c: ph.bbch_label(c, self.db.bbch_names())
@@ -192,7 +210,8 @@ class ReportGenerator:
 
     # -------------------------------------------------------------- común
     def _images(self, package: str, max_side: int = 960) -> ImageStore:
-        return ImageStore(package, max_side=max_side, quality=72)
+        return ImageStore(package, max_side=max_side, quality=72,
+                          cache_dir=os.path.join(self.preview_dir, "img"))
 
     def _render(self, template: str, filename: str, kind: str, title: str,
                 images: ImageStore, package: str, **ctx) -> ReportResult:
@@ -200,6 +219,12 @@ class ReportGenerator:
             title=title, generated=_dt.datetime.now().strftime("%d-%m-%Y %H:%M"),
             package=package, **ctx)
         base = os.path.join(self.out_dir, filename)
+        if package == "preview":
+            # Vista previa: no se guarda como informe ni se registra en la bitácora.
+            path = os.path.join(self.preview_dir, "vista_previa.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            return ReportResult(path, title, kind, max(1, len(html.encode()) // 1024))
         if package == "zip":
             path = base + ".zip"
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -370,3 +395,55 @@ class ReportGenerator:
             data_json=json.dumps([{"variedad": r["variety"]["name"],
                                    "bbch": [c["code"] for c in h["cells"]]}
                                   for r, h in zip(rows, heat)], ensure_ascii=False).replace("</", "<\\/"))
+
+
+# ===========================================================================
+# Resumen de contenido (para la pestaña «Vista previa»)
+# ===========================================================================
+EST_KB_PER_PHOTO = 75   # JPEG ~960 px q72 embebido en Base64
+
+
+def _missing_items(obs, photos) -> list[str]:
+    out = []
+    if "canopy" not in photos:
+        out.append("foto canopia")
+    if "detail" not in photos:
+        out.append("foto detalle")
+    if not obs or obs["bbch_code"] is None:
+        out.append("estado BBCH")
+    return out
+
+
+def report_summary(db, kind: str, season: int, week_id: int | None = None,
+                   week_from: int | None = None, week_to: int | None = None,
+                   variety_id: int | None = None) -> dict:
+    """Qué incluirá el informe y qué datos faltan (sin generar nada)."""
+    varieties = db.list_varieties()
+    weeks = db.list_weeks(season)
+    if kind == "weekly":
+        weeks = [w for w in weeks if w["id"] == week_id]
+    elif kind == "period":
+        weeks = [w for w in weeks if week_from <= w["week_number"] <= week_to]
+    elif kind == "variety":
+        varieties = [v for v in varieties if v["id"] == variety_id]
+    cells = complete = photos = bbch = notes = 0
+    missing: list[str] = []
+    for w in weeks:
+        for v in varieties:
+            obs = db.get_observation(v["id"], w["id"])
+            ph_ = db.get_photos(obs["id"]) if obs else {}
+            cells += 1
+            photos += len(ph_)
+            bbch += bool(obs and obs["bbch_code"] is not None)
+            notes += bool(obs and (obs["notes"] or "").strip())
+            lack = _missing_items(obs, ph_)
+            if not lack:
+                complete += 1
+            elif len(missing) < 40:
+                missing.append(f"{v['name']} · S{w['week_number']}: falta {', '.join(lack)}")
+    total_missing = cells - complete
+    return {"kind": kind, "varieties": len(varieties), "weeks": len(weeks), "cells": cells,
+            "complete": complete, "photos": photos, "photos_expected": cells * 2,
+            "bbch": bbch, "notes": notes, "missing": missing,
+            "missing_more": max(0, total_missing - len(missing)),
+            "est_kb": 40 + photos * EST_KB_PER_PHOTO}

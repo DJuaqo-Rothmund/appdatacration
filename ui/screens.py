@@ -10,6 +10,8 @@ import threading
 
 from kivy.clock import Clock, mainthread
 from kivy.metrics import dp
+from kivy.uix.behaviors import ButtonBehavior
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.layout import Layout
 from kivy.uix.widget import Widget
 from kivy.properties import (BooleanProperty, ColorProperty, ListProperty, NumericProperty,
@@ -17,20 +19,18 @@ from kivy.properties import (BooleanProperty, ColorProperty, ListProperty, Numer
 from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDRectangleFlatButton
-from kivymd.uix.card import MDCard
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.fitimage import FitImage
 from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.list import OneLineListItem, TwoLineListItem
 from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.pickers import MDDatePicker, MDTimePicker
 from kivymd.uix.screen import MDScreen
+from kivymd.uix.toolbar import MDTopAppBar
 
 import phenology as ph
 from android_bridge import store_photo
 from notifications import FREQUENCIES, can_schedule_exact, request_exact_alarm_permission
-from platform_utils import IS_ANDROID, data_subdir
-from reporter import slugify
+from platform_utils import IS_ANDROID, data_subdir, slugify
 from ui import theme
 from ui.theme import c
 
@@ -54,9 +54,35 @@ def fast_clear(container) -> None:
 # ===========================================================================
 # Widgets comunes
 # ===========================================================================
+class GlassCard(BoxLayout):
+    """
+    Tarjeta de vidrio liviana (BoxLayout + 2 instrucciones de canvas).
+
+    Reemplaza a MDCard, que arrastra comportamientos de elevación, ripple, foco
+    y tema: crear una MDCard cuesta ~15-20 ms; esta, <1 ms. Acepta las mismas
+    propiedades usadas en las reglas KV (md_bg_color, line_color, radius,
+    adaptive_height, elevation, ripple_behavior).
+    """
+    md_bg_color = ColorProperty(c(theme.GLASS))
+    line_color = ColorProperty(c(theme.GLASS_EDGE))
+    radius = ListProperty([dp(20)])
+    adaptive_height = BooleanProperty(False)
+    elevation = NumericProperty(0)            # compatibilidad (sin sombra)
+    ripple_behavior = BooleanProperty(False)  # compatibilidad (sin ripple)
+
+    def on_adaptive_height(self, *_):
+        if self.adaptive_height:
+            self.size_hint_y = None
+            self.bind(minimum_height=self.setter("height"))
+            self.height = self.minimum_height
+
+
+class GlassButton(ButtonBehavior, GlassCard):
+    """Tarjeta pulsable con realce al tocar (sin animación de ripple)."""
+
 class Tag(MDLabel):
-    bg = ColorProperty(c(theme.OLIVE_SOFT))
-    fg = ColorProperty(c(theme.OLIVE_DARK))
+    bg = ColorProperty(c(theme.LEAF_SOFT))
+    fg = ColorProperty(c(theme.LEAF_DARK))
 
 
 class UnitButton(MDRectangleFlatButton):
@@ -95,9 +121,10 @@ def open_menu(caller, items: list[tuple[str, callable]], width_mult: int = 5):
 
 def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outline"):
     """Marcador inmediato; la miniatura se genera en segundo plano y lo reemplaza."""
-    box = MDCard(md_bg_color=c(theme.OLIVE_SOFT), radius=[dp(8)], elevation=0)
+    box = GlassCard(md_bg_color=c(theme.LEAF_SOFT, .8), line_color=c("#FFFFFF", .9),
+                    radius=[dp(10)])
     box.add_widget(MDIcon(icon=icon, halign="center", theme_text_color="Custom",
-                          text_color=c(theme.OLIVE)))
+                          text_color=c(theme.LEAF)))
     if path and os.path.exists(path):
         def ready(src):
             fast_clear(box)
@@ -118,7 +145,7 @@ def confirm(title: str, text: str, actions: list[tuple[str, callable]]):
 
     buttons = [MDFlatButton(text="CANCELAR", on_release=wrap(None))]
     buttons += [MDFlatButton(text=t.upper(), theme_text_color="Custom",
-                             text_color=c(theme.BERRY if "ELIMIN" in t.upper() else theme.OLIVE_DARK),
+                             text_color=c(theme.BERRY if "ELIMIN" in t.upper() else theme.LEAF_DARK),
                              on_release=wrap(cb)) for t, cb in actions]
     dialog = MDDialog(title=title, text=text, buttons=buttons)
     dialog.open()
@@ -134,7 +161,7 @@ def form_dialog(title: str, content, on_ok, ok_text: str = "GUARDAR"):
 
     dialog = MDDialog(title=title, type="custom", content_cls=content, buttons=[
         MDFlatButton(text="CANCELAR", on_release=lambda *_: dialog.dismiss()),
-        MDFlatButton(text=ok_text, theme_text_color="Custom", text_color=c(theme.OLIVE_DARK),
+        MDFlatButton(text=ok_text, theme_text_color="Custom", text_color=c(theme.LEAF_DARK),
                      on_release=_ok)])
     dialog.open()
     return dialog
@@ -153,38 +180,58 @@ def list_dialog(title: str, rows: list[tuple[str, str]]):
 
 
 def bbch_tag_colors(code: int | None):
-    if code is None:
-        return c(theme.SLATE_SOFT), c(theme.SLATE)
-    from reporter import seq_color
-    bg, fg = seq_color(code)
-    return c(bg), c(fg)
+    """Del verde vegetativo al rojo frambuesa de la maduración."""
+    return theme.stage_colors(code)
+
+
+class TopBar(MDTopAppBar):
+    """Barra superior translúcida con texto e iconos verde profundo."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Se asigna tras construir los ids internos (en la regla KV falla en KivyMD 1.2).
+        Clock.schedule_once(lambda *_: setattr(self, "specific_text_color", c(theme.LEAF_DARK)))
+
+
+class NavTile(ButtonBehavior, BoxLayout):
+    name = StringProperty()
+    text = StringProperty()
+    active = BooleanProperty(False)
 
 
 # ===========================================================================
 # Home
 # ===========================================================================
 class HomeScreen(MDScreen):
-    def on_tab(self, name: str, title: str):
-        self.ids.bar.title = title
+    TITLES = {"sampling": "Muestreo semanal", "varieties": "Variedades en ensayo",
+              "reports": "Informes", "preview": "Vista previa"}
+
+    def on_tab(self, name: str):
+        self.ids.tabs.current = name
+        self.ids.bar.title = self.TITLES[name]
         getattr(self.ids, name).refresh()
 
     def refresh(self):
-        for tab in ("sampling", "varieties", "reports", "settings"):
+        for tab in self.TITLES:
             getattr(self.ids, tab).refresh()
 
     def refresh_current(self):
-        name = self.ids.nav.ids.tab_manager.current or "sampling"
-        getattr(self.ids, name).refresh()
+        getattr(self.ids, self.ids.tabs.current or "sampling").refresh()
 
 
-class VarietyRow(MDCard):
+class SettingsScreen(MDScreen):
+    def on_pre_enter(self, *_):
+        self.ids.settings.refresh()
+
+
+class VarietyRow(GlassButton):
     title = StringProperty()
     subtitle = StringProperty()
     photos = NumericProperty(0)
     photo_tag = StringProperty()
     code_tag = StringProperty()
-    code_bg = ColorProperty(c(theme.SLATE_SOFT))
-    code_fg = ColorProperty(c(theme.SLATE))
+    code_bg = ColorProperty(c(theme.BERRY_SOFT))
+    code_fg = ColorProperty(c(theme.LEAF_DARK))
     done = BooleanProperty(False)
     variety_id = NumericProperty()
     thumb_src = StringProperty("")
@@ -256,7 +303,7 @@ class SamplingTab(MDBoxLayout):
 # ===========================================================================
 # Variedades
 # ===========================================================================
-class VarietyCatalogRow(MDCard):
+class VarietyCatalogRow(GlassButton):
     title = StringProperty()
     code = StringProperty()
     summary = StringProperty()
@@ -424,7 +471,7 @@ class VarietyScreen(MDScreen):
         for k in existing[:3]:
             form.ids.suggestions.add_widget(MDFlatButton(
                 text=k[:18], font_size="11sp", theme_text_color="Custom",
-                text_color=c(theme.SLATE), on_release=lambda b, k=k: setattr(form.ids.key, "text", k)))
+                text_color=c(theme.LEAF_DARK), on_release=lambda b, k=k: setattr(form.ids.key, "text", k)))
 
         def ok(f):
             try:
@@ -450,7 +497,7 @@ class VarietyScreen(MDScreen):
 # ===========================================================================
 # Registro fenológico (variedad × semana)
 # ===========================================================================
-class PhotoSlot(MDCard):
+class PhotoSlot(GlassCard):
     kind = StringProperty()
     caption = StringProperty()
     meta = StringProperty("Sin foto")
@@ -463,7 +510,7 @@ class PhotoSlot(MDCard):
         fast_clear(box)
         box.add_widget(MDSpinner(size_hint=(None, None), size=(dp(32), dp(32)),
                                  pos_hint={"center_x": .5, "center_y": .5},
-                                 color=c(theme.OLIVE)))
+                                 color=c(theme.LEAF)))
         self.meta = text
 
     def show(self, photo: dict | None):
@@ -534,7 +581,7 @@ class ObservationScreen(MDScreen):
         for code, p in top[1:3]:
             box.add_widget(MDRectangleFlatButton(
                 text=f"BBCH {code:02d} · {p:.0%}", theme_text_color="Custom",
-                text_color=c(theme.SLATE), line_color=c(theme.RULE),
+                text_color=c(theme.LEAF_DARK), line_color=c(theme.LINE),
                 on_release=lambda b, code=code: self._set_bbch(code)))
 
     def _set_bbch(self, code: int):
@@ -576,7 +623,9 @@ class ObservationScreen(MDScreen):
             a.workers.submit(work)
 
         if source == "camera":
-            a.media.take_photo(done)
+            label = {"canopy": "canopia", "detail": "detalle"}[kind]
+            hint = (f"{slugify(self.variety['name'])}_S{self.week['week_number']:02d}_{label}")
+            a.media.take_photo(done, hint)
         else:
             a.media.pick_image(done)
 
@@ -664,9 +713,184 @@ class ObservationScreen(MDScreen):
 
 
 # ===========================================================================
+# Vista previa de informes (sin enviar)
+# ===========================================================================
+class PreviewTab(MDScreen):
+    kind = StringProperty("weekly")
+    KIND_NAMES = {"weekly": "Reporte semanal inter-varietal",
+                  "period": "Evolución mensual / por período",
+                  "variety": "Ficha completa por variedad",
+                  "matrix": "Matriz comparativa global"}
+
+    def refresh(self):
+        a = app()
+        weeks = a.db.list_weeks(a.season) or [a.db.current_week()]
+        if getattr(self, "_season", None) != a.season:
+            self._season = a.season
+            self.sel_week = a.week
+            self.sel_from, self.sel_to, self.sel_month = weeks[0], a.week, None
+            vs = a.db.list_varieties()
+            self.sel_variety = vs[0] if vs else None
+        self._build_params()
+        self._summarize()
+
+    def set_kind(self, kind: str):
+        self.kind = kind
+        self.refresh()
+
+    # ------------------------------------------------------------ parámetros
+    def _param_button(self, icon, text, callback):
+        from kivy.factory import Factory
+        btn = Factory.GhostButton(icon=icon, text=text)
+        btn.bind(on_release=callback)
+        return btn
+
+    def _build_params(self):
+        box = self.ids.params
+        fast_clear(box)
+        if self.kind == "weekly":
+            box.add_widget(self._param_button(
+                "calendar-week", f"Semana {self.sel_week['week_number']} · {self.sel_week['label']}",
+                lambda b: self._pick_week(b, "week")))
+        elif self.kind == "period":
+            month = (f"{ph.MESES[self.sel_month[1] - 1].capitalize()} {self.sel_month[0]}"
+                     if self.sel_month else "Elegir mes")
+            box.add_widget(self._param_button("calendar-month", month, self._pick_month))
+            row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+            row.add_widget(self._param_button("ray-start", f"Desde S{self.sel_from['week_number']}",
+                                              lambda b: self._pick_week(b, "from")))
+            row.add_widget(self._param_button("ray-end", f"Hasta S{self.sel_to['week_number']}",
+                                              lambda b: self._pick_week(b, "to")))
+            box.add_widget(row)
+        elif self.kind == "variety":
+            name = self.sel_variety["name"] if self.sel_variety else "Sin variedades"
+            box.add_widget(self._param_button("fruit-cherries", name, self._pick_variety))
+        else:
+            box.add_widget(MDLabel(text=f"Toda la temporada {app().season}-{app().season + 1}",
+                                   font_style="Caption", adaptive_height=True,
+                                   theme_text_color="Custom", text_color=c(theme.MUTED)))
+
+    def _pick_week(self, caller, target):
+        a = app()
+
+        def choose(w):
+            if target == "week":
+                self.sel_week = w
+            elif target == "from":
+                self.sel_from, self.sel_month = w, None
+            else:
+                self.sel_to, self.sel_month = w, None
+            self.refresh()
+
+        open_menu(caller, [(f"S{w['week_number']} · {w['label']}", lambda w=w: choose(w))
+                           for w in reversed(a.db.list_weeks(a.season))])
+
+    def _pick_month(self, caller):
+        a = app()
+        months = []
+        for w in a.db.list_weeks(a.season):
+            d = _dt.date.fromisoformat(w["start_date"])
+            if (d.year, d.month) not in months:
+                months.append((d.year, d.month))
+
+        def choose(ym):
+            ws = [w for w in a.db.list_weeks(a.season)
+                  if _dt.date.fromisoformat(w["start_date"]).timetuple()[:2] == ym]
+            self.sel_month, self.sel_from, self.sel_to = ym, ws[0], ws[-1]
+            self.refresh()
+
+        open_menu(caller, [(f"{ph.MESES[m - 1].capitalize()} {y}", lambda ym=(y, m): choose(ym))
+                           for y, m in months])
+
+    def _pick_variety(self, caller):
+        def choose(v):
+            self.sel_variety = v
+            self.refresh()
+        open_menu(caller, [(v["name"], lambda v=v: choose(v)) for v in app().db.list_varieties()])
+
+    # --------------------------------------------------------------- resumen
+    def _args(self) -> dict:
+        a = app()
+        if self.kind == "weekly":
+            return {"week_id": self.sel_week["id"]}
+        if self.kind == "period":
+            lo, hi = sorted((self.sel_from["week_number"], self.sel_to["week_number"]))
+            return {"week_from": lo, "week_to": hi}
+        if self.kind == "variety":
+            return {"variety_id": self.sel_variety["id"] if self.sel_variety else None}
+        return {"season": a.season}
+
+    def _summarize(self):
+        from reporter import report_summary
+        a = app()
+        args = self._args()
+        args.pop("season", None)
+        sm = report_summary(a.db, self.kind, a.season, **args)
+        self.ids.sum_title.text = self.KIND_NAMES[self.kind]
+        self.ids.stat_scope.value = f"{sm['varieties']}×{sm['weeks']}"
+        self.ids.stat_photos.value = f"{sm['photos']}/{sm['photos_expected']}"
+        self.ids.stat_bbch.value = f"{sm['bbch']}/{sm['cells']}"
+        ratio = sm["complete"] / sm["cells"] if sm["cells"] else 0
+        self.ids.completeness.value = ratio
+        self.ids.completeness_text.text = (f"{ratio:.0%} de los registros completos "
+                                           f"({sm['complete']} de {sm['cells']}) · "
+                                           f"{sm['notes']} con observaciones")
+        if sm["missing"]:
+            shown = sm["missing"][:12]
+            rest = len(sm["missing"]) + sm["missing_more"] - len(shown)
+            self.ids.missing_text.text = ("Datos faltantes:\n• " + "\n• ".join(shown)
+                                          + (f"\n… y {rest} más" if rest else ""))
+        else:
+            self.ids.missing_text.text = "Sin datos faltantes: el informe está completo."
+        mb = sm["est_kb"] / 1024
+        self.ids.size_text.text = (f"Tamaño estimado al compartir (HTML): ~{mb:.1f} MB"
+                                   if mb >= 1 else f"Tamaño estimado al compartir (HTML): ~{sm['est_kb']} KB")
+
+    # ----------------------------------------------------------- vista previa
+    def open_preview(self):
+        a = app()
+        r = a.reports
+        args = self._args()
+        kind = self.kind
+        if kind == "weekly":
+            job = lambda: r.weekly(args["week_id"], "preview")  # noqa: E731
+        elif kind == "period":
+            if self.sel_month:
+                job = lambda: r.monthly(a.season, *self.sel_month, package="preview")  # noqa: E731
+            else:
+                job = lambda: r.period(a.season, args["week_from"], args["week_to"], "preview")  # noqa: E731
+        elif kind == "variety":
+            if not args["variety_id"]:
+                return
+            job = lambda: r.variety(args["variety_id"], a.season, "preview")  # noqa: E731
+        else:
+            job = lambda: r.matrix(a.season, package="preview")  # noqa: E731
+        self.ids.preview_btn.disabled = True
+        self.ids.preview_btn.text = "Preparando vista previa…"
+
+        def work():
+            try:
+                res = job()
+                Clock.schedule_once(lambda *_: self._ready(res, None))
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+                Clock.schedule_once(lambda *_: self._ready(None, error))
+
+        a.workers.submit(work)
+
+    def _ready(self, res, error):
+        self.ids.preview_btn.disabled = False
+        self.ids.preview_btn.text = "Ver vista previa completa"
+        if error:
+            app().toast(f"No se pudo preparar la vista previa: {error}")
+            return
+        app().media.preview(res.path, res.title)
+
+
+# ===========================================================================
 # Informes
 # ===========================================================================
-class ReportRow(MDCard):
+class ReportRow(GlassButton):
     title = StringProperty()
     meta = StringProperty()
     path = StringProperty()
@@ -804,11 +1028,14 @@ class SettingsTab(MDScreen):
                 text_color=c(theme.WARN), line_color=c(theme.WARN),
                 on_release=lambda *_: request_exact_alarm_permission()))
         start = a.db.season_start(a.season)
-        self.ids.season_text.text = f"Temporada activa: {a.season}-{a.season + 1}"
+        self.ids.season_text.text = (f"Temporada {a.season}-{a.season + 1} · semana en curso: "
+                                     f"Semana {a.week['week_number']} ({a.week['label']})")
         self.ids.start_btn.text = f"Semana 1: semana del {ph.format_date_es(start)}"
-        ext = a.classifier.extractor
         n = sum(a.db.reference_counts().values())
-        self.ids.ai_text.text = (f"Extractor: {ext.name} ({ext.dim} dim.) · {n} fotos de referencia. "
+        # Sin instanciar el clasificador (evita cargar numpy solo por abrir Ajustes).
+        ext = a.__dict__.get("classifier")
+        engine = f"Extractor: {ext.extractor.name} · " if ext else ""
+        self.ids.ai_text.text = (f"{engine}{n} fotos de referencia. "
                                  "Todo el análisis se ejecuta en el teléfono, sin conexión.")
         self.ids.data_text.text = f"Datos locales: {a.db.path}"
 
@@ -833,8 +1060,9 @@ class SettingsTab(MDScreen):
 
     def pick_time(self):
         cfg = app().reminders.config()
-        picker = MDTimePicker(primary_color=c(theme.OLIVE), accent_color=c(theme.PAPER),
-                              text_button_color=c(theme.OLIVE_DARK))
+        from kivymd.uix.pickers import MDTimePicker  # import diferido (pesado)
+        picker = MDTimePicker(primary_color=c(theme.LEAF), accent_color=c(theme.GLASS),
+                              text_button_color=c(theme.LEAF_DARK))
         picker.set_time(_dt.time(cfg.hour, cfg.minute))
         picker.bind(on_save=lambda inst, t: self._save(hour=t.hour, minute=t.minute))
         picker.open()
@@ -842,19 +1070,38 @@ class SettingsTab(MDScreen):
     def pick_start(self):
         a = app()
         start = a.db.season_start(a.season)
+        from kivymd.uix.pickers import MDDatePicker  # import diferido (pesado)
         picker = MDDatePicker(year=start.year, month=start.month, day=start.day,
-                              primary_color=c(theme.OLIVE), selector_color=c(theme.OLIVE),
-                              text_button_color=c(theme.OLIVE_DARK))
+                              primary_color=c(theme.LEAF), selector_color=c(theme.LEAF),
+                              text_button_color=c(theme.LEAF_DARK))
+        picker.bind(on_save=lambda inst, value, _range: self._confirm_start(value))
+        picker.open()
 
-        def save(inst, value, _range):
-            a.db.set_season_start(ph.season_of(value), value)
-            a.season = ph.season_of(value)
+    def reset_start(self):
+        self._confirm_start(ph.default_season_start(app().season))
+
+    def _confirm_start(self, value: _dt.date):
+        a = app()
+        season = ph.season_of(value)
+        if value == a.db.season_start(season):
+            a.toast("Esa ya es la semana de inicio.")
+            return
+        n = a.db.count_observations(season)
+
+        def apply():
+            a.db.set_season_start(season, value)
+            a.season = season
             a.week = a.db.current_week()
-            a.refresh_home()
+            self.refresh()
             a.toast(f"Semana 1 = semana del {ph.format_date_es(value)}")
 
-        picker.bind(on_save=save)
-        picker.open()
+        if n:
+            confirm("Cambiar la semana de inicio",
+                    f"Hay {n} registro(s) en la temporada. Conservarán su número de semana "
+                    f"(p. ej. «Semana 3»), pero sus fechas y etiquetas se recalcularán desde el "
+                    f"{ph.format_date_es(value)}.", [("Cambiar", apply)])
+        else:
+            apply()
 
     def show_audit(self):
         rows = [(f"{r['action']} · {r['entity']}" + (f" #{r['entity_id']}" if r["entity_id"] else ""),
@@ -880,7 +1127,7 @@ class PinForm(MDBoxLayout):
     pass
 
 
-class LabelPhotoRow(MDCard):
+class LabelPhotoRow(GlassButton):
     title = StringProperty()
     subtitle = StringProperty()
     in_reference = BooleanProperty(False)
@@ -959,7 +1206,7 @@ class AILabScreen(MDScreen):
         if len(photos) > limit:
             box.add_widget(MDFlatButton(
                 text=f"MOSTRAR MÁS ({len(photos) - limit} restantes)", pos_hint={"center_x": .5},
-                theme_text_color="Custom", text_color=c(theme.OLIVE_DARK),
+                theme_text_color="Custom", text_color=c(theme.LEAF_DARK),
                 on_release=lambda *_: self._more_labels()))
         if not photos:
             box.add_widget(MDLabel(text="No hay fotos de detalle en la temporada.",
@@ -1046,6 +1293,44 @@ class AILabScreen(MDScreen):
                                             self.refresh_model()))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def try_photo(self):
+        a = app()
+
+        def picked(path, _origin):
+            if not path:
+                return
+            self.ids.spinner.active = True
+            self.ids.try_label.text = "Analizando…"
+            week = a.week["week_number"]
+
+            def work():
+                try:
+                    preview = a.thumb(path, 640)
+                    s = a.classifier.suggest(path, week_number=week)
+                    Clock.schedule_once(lambda *_: self._show(preview, s, None))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: self._show(None, None, error))
+
+            a.workers.submit(work)
+
+        a.media.pick_image(picked)
+
+    def _show(self, preview, s, error):
+        self.ids.spinner.active = False
+        if error:
+            self.ids.try_label.text = "No se pudo analizar la imagen."
+            self.ids.try_explain.text = str(error)
+            return
+        box = self.ids.try_box
+        fast_clear(box)
+        box.add_widget(FitImage(source=preview, radius=[dp(16)]))
+        box.height, box.opacity = dp(190), 1
+        self.ids.try_label.text = s.label
+        self.ids.try_conf.value = s.confidence
+        alts = " · ".join(f"BBCH {code:02d} {p:.0%}" for code, p in s.top[1:])
+        self.ids.try_explain.text = f"Confianza {s.confidence:.0%} · alternativas: {alts}\n{s.explanation}"
 
     def change_pin(self):
         a = app()

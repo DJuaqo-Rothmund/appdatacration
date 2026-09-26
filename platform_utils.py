@@ -7,7 +7,9 @@ y el servicio de recordatorios (proceso Python independiente en Android).
 from __future__ import annotations
 
 import os
+import re
 import sys
+import unicodedata
 
 APP_NAME = "FenoRubus"
 APP_SLUG = "fenorubus"
@@ -73,3 +75,8 @@ def data_subdir(*parts: str) -> str:
 def resource_path(*parts: str) -> str:
     """Ruta a recursos empaquetados junto al código (templates, modelos)."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), *parts)
+
+
+def slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower() or "informe"

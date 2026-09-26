@@ -1,6 +1,7 @@
 #:import theme ui.theme
 #:import c ui.theme.c
 #:import dp kivy.metrics.dp
+#:import NoTransition kivy.uix.screenmanager.NoTransition
 
 # ---------------------------------------------------------------------------
 # Piezas base
@@ -9,14 +10,17 @@
     font_style: "Overline"
     bold: True
     theme_text_color: "Custom"
-    text_color: c(theme.OLIVE)
+    text_color: c(theme.LEAF)
     adaptive_height: True
 
 <Muted@MDLabel>:
     font_style: "Caption"
     theme_text_color: "Custom"
     text_color: c(theme.MUTED)
-    adaptive_height: True
+    # Sin adaptive_height: en KivyMD 1.2 un MDLabel vacío conservaría 100 px de alto.
+    size_hint_y: None
+    text_size: self.width, None
+    height: self.texture_size[1] if self.text else 0
 
 <Body@MDLabel>:
     font_style: "Body2"
@@ -24,19 +28,42 @@
     text_color: c(theme.INK)
     adaptive_height: True
 
-<PaperCard@MDCard>:
+<GlassCard>:
+    canvas.before:
+        Color:
+            rgba: self.md_bg_color
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: self.radius
+        Color:
+            rgba: self.line_color
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, min(self.radius[0], self.width / 2.1, self.height / 2.1) if self.width > 4 and self.height > 4 else 1)
+            width: dp(1)
+
+<GlassButton>:
+    canvas.after:
+        Color:
+            rgba: (1, 1, 1, .35) if self.state == "down" else (1, 1, 1, 0)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: self.radius
+
+<PaperCard@GlassCard>:
     orientation: "vertical"
-    padding: dp(14)
-    spacing: dp(8)
-    radius: [dp(12)]
+    padding: dp(16)
+    spacing: dp(9)
+    radius: [dp(22)]
     elevation: 0
     adaptive_height: True
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
 
 <Tag>:
     adaptive_size: True
-    padding: dp(8), dp(3)
+    padding: dp(9), dp(3)
     font_style: "Caption"
     bold: True
     theme_text_color: "Custom"
@@ -47,79 +74,168 @@
         RoundedRectangle:
             pos: self.pos
             size: self.size
-            radius: [dp(9)]
+            radius: [dp(10)]
+        Color:
+            rgba: 1, 1, 1, .7
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, dp(10))
+            width: dp(.8)
 
 <PrimaryButton@MDRaisedButton>:
-    md_bg_color: c(theme.OLIVE)
+    md_bg_color: c(theme.BERRY)
     elevation: 0
+    rounded_button: True
     size_hint_x: 1
-    height: dp(44)
+    height: dp(46)
+    font_size: "15sp"
 
 <GhostButton@MDRectangleFlatIconButton>:
     theme_text_color: "Custom"
-    text_color: c(theme.OLIVE_DARK)
-    icon_color: c(theme.OLIVE_DARK)
-    line_color: c(theme.RULE)
+    text_color: c(theme.LEAF_DARK)
+    icon_color: c(theme.LEAF_DARK)
+    line_color: c(theme.LINE)
+    md_bg_color: 1, 1, 1, .45
+    rounded_button: True
     size_hint_x: 1
 
 <Field@MDTextField>:
     mode: "rectangle"
-    line_color_focus: c(theme.OLIVE)
-    hint_text_color_focus: c(theme.OLIVE)
+    line_color_normal: c(theme.LINE)
+    line_color_focus: c(theme.BERRY)
+    hint_text_color_focus: c(theme.BERRY)
+    fill_color_normal: 1, 1, 1, .5
 
-<TopBar@MDTopAppBar>:
+<TopBar>:
     elevation: 0
-    md_bg_color: c(theme.OLIVE)
+    md_bg_color: 1, 1, 1, .5
+
+# ---------------------------------------------------------------------------
+# Barra de navegación inferior (azulejos de vidrio con iconos propios)
+# ---------------------------------------------------------------------------
+<NavTile>:
+    orientation: "vertical"
+    spacing: dp(3)
+    padding: 0, dp(6), 0, dp(2)
+    AnchorLayout:
+        size_hint_y: None
+        height: dp(52)
+        AnchorLayout:
+            size_hint: None, None
+            size: dp(52), dp(52)
+            canvas.before:
+                Color:
+                    rgba: c(theme.BERRY_SOFT, .95) if root.active else (1, 1, 1, .55)
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [dp(16)]
+                Color:
+                    rgba: c(theme.BERRY_LIGHT, .9) if root.active else (1, 1, 1, .95)
+                Line:
+                    rounded_rectangle: (self.x, self.y, self.width, self.height, dp(16))
+                    width: dp(1.2)
+            Image:
+                source: theme.nav_icon(root.name, root.active)
+                size_hint: None, None
+                size: dp(36), dp(36)
+                mipmap: True
+    MDLabel:
+        text: root.text
+        halign: "center"
+        font_style: "Caption"
+        bold: root.active
+        theme_text_color: "Custom"
+        text_color: c(theme.BERRY) if root.active else c(theme.INK_2)
+        size_hint_y: None
+        height: dp(16)
+
+<NavBar@BoxLayout>:
+    size_hint_y: None
+    height: dp(96)
+    padding: dp(18), dp(10), dp(18), dp(14)
+    spacing: dp(6)
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, .62
+        RoundedRectangle:
+            pos: self.x + dp(10), self.y + dp(8)
+            size: self.width - dp(20), self.height - dp(12)
+            radius: [dp(28)]
+        Color:
+            rgba: 1, 1, 1, .95
+        Line:
+            rounded_rectangle: (self.x + dp(10), self.y + dp(8), self.width - dp(20), self.height - dp(12), dp(28))
+            width: dp(1.1)
 
 # ---------------------------------------------------------------------------
 # Home + pestañas
 # ---------------------------------------------------------------------------
 <HomeScreen>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDBoxLayout:
         orientation: "vertical"
         TopBar:
             id: bar
             title: "Muestreo semanal"
-            right_action_items: [["brain", lambda x: app.open_ai_lab()]]
-        MDBottomNavigation:
-            id: nav
-            panel_color: c(theme.PAPER)
-            selected_color_background: c(theme.OLIVE_SOFT)
-            text_color_active: c(theme.OLIVE_DARK)
-            text_color_normal: c(theme.MUTED)
-            MDBottomNavigationItem:
+            right_action_items: [["brain", lambda x: app.open_ai_lab(), "Entrenador de IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
+        ScreenManager:
+            id: tabs
+            transition: NoTransition()
+            Screen:
                 name: "sampling"
-                text: "Muestreo"
-                icon: "sprout-outline"
-                on_tab_press: root.on_tab("sampling", "Muestreo semanal")
                 SamplingTab:
                     id: sampling
-            MDBottomNavigationItem:
+            Screen:
                 name: "varieties"
-                text: "Variedades"
-                icon: "fruit-cherries"
-                on_tab_press: root.on_tab("varieties", "Variedades en ensayo")
                 VarietiesTab:
                     id: varieties
-            MDBottomNavigationItem:
+            Screen:
                 name: "reports"
-                text: "Informes"
-                icon: "file-chart-outline"
-                on_tab_press: root.on_tab("reports", "Informes HTML")
                 ReportsTab:
                     id: reports
-            MDBottomNavigationItem:
-                name: "settings"
-                text: "Ajustes"
-                icon: "cog-outline"
-                on_tab_press: root.on_tab("settings", "Ajustes")
-                SettingsTab:
-                    id: settings
+            Screen:
+                name: "preview"
+                PreviewTab:
+                    id: preview
+        NavBar:
+            NavTile:
+                id: nav_sampling
+                name: "sampling"
+                text: "Muestreo"
+                active: tabs.current == "sampling"
+                on_release: root.on_tab("sampling")
+            NavTile:
+                id: nav_varieties
+                name: "varieties"
+                text: "Variedades"
+                active: tabs.current == "varieties"
+                on_release: root.on_tab("varieties")
+            NavTile:
+                id: nav_reports
+                name: "reports"
+                text: "Informes"
+                active: tabs.current == "reports"
+                on_release: root.on_tab("reports")
+            NavTile:
+                id: nav_preview
+                name: "preview"
+                text: "Vista previa"
+                active: tabs.current == "preview"
+                on_release: root.on_tab("preview")
+
+<SettingsScreen>:
+    md_bg_color: 0, 0, 0, 0
+    MDBoxLayout:
+        orientation: "vertical"
+        TopBar:
+            title: "Ajustes"
+            left_action_items: [["arrow-left", lambda x: app.back()]]
+        SettingsTab:
+            id: settings
 
 <SamplingTab>:
     orientation: "vertical"
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDScrollView:
         do_scroll_x: False
         MDBoxLayout:
@@ -166,8 +282,8 @@
                         id: progress
                         max: 1
                         value: 0
-                        color: c(theme.OLIVE)
-                        back_color: c(theme.OLIVE_SOFT)
+                        color: c(theme.LEAF)
+                        back_color: c(theme.LEAF_SOFT)
                         size_hint_y: None
                         height: dp(6)
                         pos_hint: {"center_y": .5}
@@ -179,7 +295,7 @@
                 MDFlatButton:
                     text: "Ir a la semana actual"
                     theme_text_color: "Custom"
-                    text_color: c(theme.SLATE)
+                    text_color: c(theme.LEAF_DARK)
                     pos_hint: {"center_x": .5}
                     on_release: root.go_current()
             SectionLabel:
@@ -198,8 +314,8 @@
     elevation: 0
     size_hint_y: None
     height: dp(76)
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
     ripple_behavior: True
     MDBoxLayout:
         id: thumb_box
@@ -233,8 +349,8 @@
         pos_hint: {"center_y": .5}
         Tag:
             text: root.photo_tag
-            bg: c(theme.OLIVE_SOFT) if root.photos == 2 else c(theme.SLATE_SOFT)
-            fg: c(theme.OLIVE_DARK) if root.photos == 2 else c(theme.SLATE)
+            bg: c(theme.LEAF_SOFT) if root.photos == 2 else c(theme.BERRY_SOFT)
+            fg: c(theme.LEAF_DARK) if root.photos == 2 else c(theme.LEAF_DARK)
             pos_hint: {"right": 1}
         Tag:
             text: root.code_tag
@@ -243,7 +359,7 @@
             pos_hint: {"right": 1}
 
 <VarietiesTab>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDScrollView:
         do_scroll_x: False
         MDBoxLayout:
@@ -260,7 +376,7 @@
                 spacing: dp(8)
     MDFloatingActionButton:
         icon: "plus"
-        md_bg_color: c(theme.OLIVE)
+        md_bg_color: c(theme.LEAF)
         pos_hint: {"right": .95, "y": .03}
         on_release: root.add_dialog()
 
@@ -272,8 +388,8 @@
     elevation: 0
     size_hint_y: None
     height: dp(76)
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
     ripple_behavior: True
     MDBoxLayout:
         orientation: "vertical"
@@ -293,8 +409,8 @@
             Tag:
                 text: root.code
                 opacity: 1 if root.code else 0
-                bg: c(theme.SLATE_SOFT)
-                fg: c(theme.SLATE)
+                bg: c(theme.BERRY_SOFT)
+                fg: c(theme.LEAF_DARK)
                 pos_hint: {"center_y": .5}
         MDLabel:
             text: root.summary
@@ -307,7 +423,7 @@
         icon: "pencil-outline"
         pos_hint: {"center_y": .5}
         theme_icon_color: "Custom"
-        icon_color: c(theme.SLATE)
+        icon_color: c(theme.LEAF_DARK)
         on_release: root.tab.open_variety(root.variety_id)
     MDIconButton:
         icon: "delete-outline"
@@ -317,7 +433,7 @@
         on_release: root.tab.delete_dialog(root.variety_id)
 
 <ReportsTab>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDScrollView:
         do_scroll_x: False
         MDBoxLayout:
@@ -343,7 +459,7 @@
                         on_release: root.generate("weekly", "html")
                     PrimaryButton:
                         text: "ZIP portátil"
-                        md_bg_color: c(theme.SLATE)
+                        md_bg_color: c(theme.LEAF_DARK)
                         on_release: root.generate("weekly", "zip")
             PaperCard:
                 SectionLabel:
@@ -376,7 +492,7 @@
                         on_release: root.generate("period", "html")
                     PrimaryButton:
                         text: "ZIP portátil"
-                        md_bg_color: c(theme.SLATE)
+                        md_bg_color: c(theme.LEAF_DARK)
                         on_release: root.generate("period", "zip")
             PaperCard:
                 SectionLabel:
@@ -396,7 +512,7 @@
                         on_release: root.generate("variety", "html")
                     PrimaryButton:
                         text: "ZIP portátil"
-                        md_bg_color: c(theme.SLATE)
+                        md_bg_color: c(theme.LEAF_DARK)
                         on_release: root.generate("variety", "zip")
             PaperCard:
                 SectionLabel:
@@ -411,7 +527,7 @@
                         on_release: root.generate("matrix", "html")
                     PrimaryButton:
                         text: "ZIP portátil"
-                        md_bg_color: c(theme.SLATE)
+                        md_bg_color: c(theme.LEAF_DARK)
                         on_release: root.generate("matrix", "zip")
             SectionLabel:
                 text: "INFORMES GENERADOS"
@@ -428,8 +544,8 @@
     elevation: 0
     size_hint_y: None
     height: dp(60)
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
     MDBoxLayout:
         orientation: "vertical"
         adaptive_height: True
@@ -458,7 +574,7 @@
         on_release: app.share_file(root.path)
 
 <SettingsTab>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDScrollView:
         do_scroll_x: False
         MDBoxLayout:
@@ -504,7 +620,7 @@
                     spacing: dp(8)
             PaperCard:
                 SectionLabel:
-                    text: "TEMPORADA Y SEMANAS DE MUESTREO"
+                    text: "SEMANA DE INICIO DEL MUESTREO"
                 Body:
                     id: season_text
                 GhostButton:
@@ -512,8 +628,20 @@
                     icon: "calendar-start"
                     text: "Semana 1"
                     on_release: root.pick_start()
+                GhostButton:
+                    icon: "calendar-refresh"
+                    text: "Restablecer: semana del 7 de septiembre"
+                    on_release: root.reset_start()
                 Muted:
-                    text: "Las semanas siguientes se generan en forma secuencial cada 7 días desde la Semana 1."
+                    text: "Elija cualquier fecha como Semana 1; las siguientes se generan cada 7 días («Semana del 14 de…», «Semana del 21 de…»). Por defecto: semana del 7 de septiembre."
+            PaperCard:
+                SectionLabel:
+                    text: "FOTOS EN EL TELÉFONO"
+                Body:
+                    text: "Las fotos tomadas con la cámara de la app se guardan también en la carpeta «Imágenes › Imágenes de Fenología», con nombres descriptivos (variedad, semana y tipo de foto)."
+                    adaptive_height: True
+                Muted:
+                    text: "Para respaldarlas en Google Fotos: Biblioteca › Fotos del dispositivo › «Imágenes de Fenología» › activar «Copia de seguridad»."
             PaperCard:
                 SectionLabel:
                     text: "INTELIGENCIA ARTIFICIAL (EDGE AI)"
@@ -537,6 +665,113 @@
                     text: "Respaldar base de datos"
                     on_release: root.backup()
 
+<StatTile@GlassCard>:
+    orientation: "vertical"
+    padding: dp(12), dp(10)
+    radius: [dp(18)]
+    md_bg_color: 1, 1, 1, .6
+    size_hint_y: None
+    height: dp(78)
+    value: ""
+    label: ""
+    accent: c(theme.LEAF_DARK)
+    MDLabel:
+        text: root.value
+        font_style: "H5"
+        bold: True
+        theme_text_color: "Custom"
+        text_color: root.accent
+    MDLabel:
+        text: root.label
+        font_style: "Caption"
+        theme_text_color: "Custom"
+        text_color: c(theme.MUTED)
+        size_hint_y: None
+        height: dp(18)
+
+<PreviewTab>:
+    md_bg_color: 0, 0, 0, 0
+    MDScrollView:
+        do_scroll_x: False
+        MDBoxLayout:
+            orientation: "vertical"
+            adaptive_height: True
+            padding: dp(16), dp(10), dp(16), dp(24)
+            spacing: dp(12)
+            PaperCard:
+                SectionLabel:
+                    text: "TIPO DE INFORME"
+                MDGridLayout:
+                    cols: 2
+                    spacing: dp(8)
+                    adaptive_height: True
+                    SegButton:
+                        text: "Semanal"
+                        selected: root.kind == "weekly"
+                        on_release: root.set_kind("weekly")
+                    SegButton:
+                        text: "Mensual / período"
+                        selected: root.kind == "period"
+                        on_release: root.set_kind("period")
+                    SegButton:
+                        text: "Por variedad"
+                        selected: root.kind == "variety"
+                        on_release: root.set_kind("variety")
+                    SegButton:
+                        text: "Matriz global"
+                        selected: root.kind == "matrix"
+                        on_release: root.set_kind("matrix")
+                MDBoxLayout:
+                    id: params
+                    orientation: "vertical"
+                    adaptive_height: True
+                    spacing: dp(8)
+            PaperCard:
+                SectionLabel:
+                    text: "QUÉ SE MOSTRARÁ"
+                MDLabel:
+                    id: sum_title
+                    font_style: "Subtitle1"
+                    bold: True
+                    adaptive_height: True
+                    theme_text_color: "Custom"
+                    text_color: c(theme.LEAF_DARK)
+                MDGridLayout:
+                    cols: 3
+                    spacing: dp(8)
+                    adaptive_height: True
+                    StatTile:
+                        id: stat_scope
+                        label: "variedades × semanas"
+                    StatTile:
+                        id: stat_photos
+                        label: "fotos"
+                    StatTile:
+                        id: stat_bbch
+                        label: "estados BBCH"
+                        accent: c(theme.BERRY)
+                MDProgressBar:
+                    id: completeness
+                    max: 1
+                    value: 0
+                    color: c(theme.BERRY)
+                    back_color: c(theme.BERRY_SOFT)
+                    size_hint_y: None
+                    height: dp(6)
+                Muted:
+                    id: completeness_text
+                Muted:
+                    id: missing_text
+                Muted:
+                    id: size_text
+            PrimaryButton:
+                id: preview_btn
+                text: "Ver vista previa completa"
+                on_release: root.open_preview()
+            Muted:
+                halign: "center"
+                text: "La vista previa se muestra solo en este teléfono: no se envía ni se copia a Descargas."
+
 # ---------------------------------------------------------------------------
 # Registro fenológico
 # ---------------------------------------------------------------------------
@@ -548,8 +783,8 @@
     elevation: 0
     size_hint_y: None
     height: dp(250)
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
     SectionLabel:
         text: root.caption
         shorten: True
@@ -564,12 +799,12 @@
         MDIconButton:
             icon: "camera-outline"
             theme_icon_color: "Custom"
-            icon_color: c(theme.OLIVE_DARK)
+            icon_color: c(theme.LEAF_DARK)
             on_release: root.screen.capture(root.kind, "camera")
         MDIconButton:
             icon: "image-outline"
             theme_icon_color: "Custom"
-            icon_color: c(theme.OLIVE_DARK)
+            icon_color: c(theme.LEAF_DARK)
             on_release: root.screen.capture(root.kind, "gallery")
         Widget:
         MDIconButton:
@@ -580,7 +815,7 @@
             on_release: root.screen.remove_photo(root.kind)
 
 <ObservationScreen>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDBoxLayout:
         orientation: "vertical"
         TopBar:
@@ -623,7 +858,7 @@
                             size: dp(22), dp(22)
                             active: False
                             opacity: 1 if self.active else 0
-                            color: c(theme.OLIVE)
+                            color: c(theme.LEAF)
                             pos_hint: {"center_y": .5}
                         MDLabel:
                             id: ai_label
@@ -640,8 +875,8 @@
                             id: ai_conf
                             max: 1
                             value: 0
-                            color: c(theme.OLIVE)
-                            back_color: c(theme.OLIVE_SOFT)
+                            color: c(theme.LEAF)
+                            back_color: c(theme.LEAF_SOFT)
                             size_hint_y: None
                             height: dp(6)
                             pos_hint: {"center_y": .5}
@@ -704,11 +939,11 @@
     width: dp(128)
     pos_hint: {"center_y": .5}
     theme_text_color: "Custom"
-    text_color: c(theme.SLATE)
-    line_color: c(theme.RULE)
+    text_color: c(theme.LEAF_DARK)
+    line_color: c(theme.LINE)
 
 <VarietyScreen>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDBoxLayout:
         orientation: "vertical"
         TopBar:
@@ -879,18 +1114,17 @@
 <SegButton>:
     size_hint_x: 1
     elevation: 0
-    md_bg_color: c(theme.OLIVE) if self.selected else c(theme.PAPER)
+    md_bg_color: c(theme.LEAF) if self.selected else c(theme.GLASS)
     theme_text_color: "Custom"
-    text_color: (1, 1, 1, 1) if self.selected else c(theme.OLIVE_DARK)
-    line_color: c(theme.RULE)
+    text_color: (1, 1, 1, 1) if self.selected else c(theme.LEAF_DARK)
+    line_color: c(theme.LINE)
 
 <AILabScreen>:
-    md_bg_color: c(theme.BONE)
+    md_bg_color: 0, 0, 0, 0
     MDBoxLayout:
         orientation: "vertical"
         TopBar:
             title: "Calibración IA"
-            md_bg_color: c(theme.SLATE)
             left_action_items: [["arrow-left", lambda x: app.back()]]
             right_action_items: [["lock-outline", lambda x: app.back()]]
         MDBoxLayout:
@@ -989,7 +1223,7 @@
                                 id: train_progress
                                 max: 1
                                 value: 0
-                                color: c(theme.SLATE)
+                                color: c(theme.LEAF_DARK)
                                 size_hint_y: None
                                 height: dp(4)
                             PrimaryButton:
@@ -999,6 +1233,49 @@
                                 icon: "cog-refresh-outline"
                                 text: "Re-entrenar (recalcular embeddings)"
                                 on_release: root.retrain()
+                        PaperCard:
+                            SectionLabel:
+                                text: "PROBAR CON UNA FOTO"
+                            Muted:
+                                text: "Analiza una imagen de la galería sin guardarla en ningún registro."
+                            MDBoxLayout:
+                                id: try_box
+                                size_hint_y: None
+                                height: dp(0)
+                                opacity: 0
+                            MDBoxLayout:
+                                adaptive_height: True
+                                spacing: dp(10)
+                                MDSpinner:
+                                    id: spinner
+                                    size_hint: None, None
+                                    size: dp(22), dp(22)
+                                    active: False
+                                    opacity: 1 if self.active else 0
+                                    color: c(theme.BERRY)
+                                    pos_hint: {"center_y": .5}
+                                MDLabel:
+                                    id: try_label
+                                    text: "Sin análisis todavía."
+                                    font_style: "Subtitle1"
+                                    bold: True
+                                    adaptive_height: True
+                                    theme_text_color: "Custom"
+                                    text_color: c(theme.INK)
+                            MDProgressBar:
+                                id: try_conf
+                                max: 1
+                                value: 0
+                                color: c(theme.BERRY)
+                                back_color: c(theme.BERRY_SOFT)
+                                size_hint_y: None
+                                height: dp(6)
+                            Muted:
+                                id: try_explain
+                            GhostButton:
+                                icon: "image-search-outline"
+                                text: "Elegir foto y analizar"
+                                on_release: root.try_photo()
                         PaperCard:
                             SectionLabel:
                                 text: "REFERENCIAS POR ESTADO BBCH"
@@ -1023,8 +1300,8 @@
     elevation: 0
     size_hint_y: None
     height: dp(72)
-    md_bg_color: c(theme.PAPER)
-    line_color: c(theme.RULE)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
     ripple_behavior: True
     MDBoxLayout:
         id: thumb_box
@@ -1052,6 +1329,6 @@
             text_color: c(theme.MUTED)
     Tag:
         text: "EN REFERENCIA" if root.in_reference else "SIN ETIQUETA IA"
-        bg: c(theme.OLIVE_SOFT) if root.in_reference else c(theme.SLATE_SOFT)
-        fg: c(theme.OLIVE_DARK) if root.in_reference else c(theme.SLATE)
+        bg: c(theme.LEAF_SOFT) if root.in_reference else c(theme.BERRY_SOFT)
+        fg: c(theme.LEAF_DARK) if root.in_reference else c(theme.LEAF_DARK)
         pos_hint: {"center_y": .5}

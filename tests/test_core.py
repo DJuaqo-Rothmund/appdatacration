@@ -162,3 +162,30 @@ def test_suggestion_detail_is_json(db, tmp_path):
         clf.add_reference(synthetic_photo(code, "detail", str(tmp_path / f"r{i}.jpg"), i), code)
     s = clf.suggest(synthetic_photo(65, "detail", str(tmp_path / "q.jpg"), 9), week_number=10)
     assert json.loads(s.as_detail_json())["top"][0][0] == s.code
+
+
+def test_preview_mode_and_summary(db, tmp_path):
+    from reporter import report_summary
+    season = 2026
+    db.ensure_weeks(season, 2)
+    v = db.list_varieties()[0]
+    w = db.list_weeks(season)[0]
+    obs = db.get_or_create_observation(v["id"], w["id"])
+    db.set_photo(obs["id"], "detail", synthetic_photo(65, "detail", str(tmp_path / "d.jpg"), 1))
+    sm = report_summary(db, "weekly", season, week_id=w["id"])
+    assert sm["cells"] == 10 and sm["photos"] == 1 and sm["complete"] == 0
+    assert any("Código 11 · S1: falta foto canopia, estado BBCH" == m for m in sm["missing"])
+    rep = ReportGenerator(db, str(tmp_path / "reports"))
+    res = rep.weekly(w["id"], "preview")
+    html = open(res.path, encoding="utf-8").read()
+    assert res.path.endswith("vista_previa.html") and "file://" in html
+    assert "base64" not in html                      # imágenes livianas, no embebidas
+    assert os.listdir(str(tmp_path / "reports")) == []  # no se guarda como informe
+
+
+def test_any_start_week_and_reset(db):
+    db.set_season_start(2026, dt.date(2026, 8, 20))
+    w = db.current_week(dt.date(2026, 9, 25))
+    assert w["label"] == "Semana del 24 de septiembre" and w["week_number"] == 6
+    db.set_season_start(2026, ph.default_season_start(2026))
+    assert db.list_weeks(2026)[0]["label"] == "Semana del 7 de septiembre"

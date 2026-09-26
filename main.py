@@ -13,8 +13,16 @@ import hashlib
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from functools import cached_property
 
 os.environ.setdefault("KIVY_LOG_MODE", "PYTHON")
+
+from kivy.config import Config  # noqa: E402
+
+# Rendimiento en gama media/baja: sin antialiasing multisample (MSAA duplica el
+# costo de relleno en GPUs modestas; en pantallas de alta densidad no se nota).
+Config.set("graphics", "multisamples", "0")
+Config.set("kivy", "exit_on_escape", "0")
 
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
@@ -25,20 +33,20 @@ from kivymd.app import MDApp  # noqa: E402
 from kivymd.uix.label import MDLabel  # noqa: E402
 from kivymd.uix.screenmanager import MDScreenManager  # noqa: E402
 from kivymd.uix.snackbar import MDSnackbar  # noqa: E402
-from kivy.uix.screenmanager import SlideTransition  # noqa: E402
+from kivy.uix.floatlayout import FloatLayout  # noqa: E402
+from kivy.uix.image import Image  # noqa: E402
+from kivy.uix.screenmanager import FadeTransition  # noqa: E402
 
 from ui import theme  # noqa: E402
 
 theme.install_palette()  # antes de cargar widgets KivyMD con color
 
-from ai_classifier import PhenologyClassifier, PinGuard  # noqa: E402
 from android_bridge import create_media, make_thumbnail, request_runtime_permissions  # noqa: E402
 from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, resource_path  # noqa: E402
-from reporter import ReportGenerator  # noqa: E402
 from ui.screens import (AILabScreen, HomeScreen, ObservationScreen, PinForm,  # noqa: E402
-                        VarietyScreen, form_dialog)
+                        SettingsScreen, VarietyScreen, form_dialog)
 
 MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3"}
 
@@ -52,9 +60,6 @@ class FenoRubusApp(MDApp):
         if platform not in ("android", "ios"):
             Window.size = (412, 860)
         self.db = Database(default_db_path())
-        self.classifier = PhenologyClassifier(self.db)
-        self.pin = PinGuard(self.db)
-        self.reports = ReportGenerator(self.db, data_subdir("reports"))
         self.reminders = ReminderManager(self.db)
         self.media = create_media(data_subdir("tmp"), self._desktop_file_chooser)
         self.week = self.db.current_week()
@@ -64,18 +69,59 @@ class FenoRubusApp(MDApp):
         self._file_manager = None
 
         Builder.load_file(resource_path("ui", "layout.kv"))
-        self.sm = MDScreenManager(transition=SlideTransition(duration=0.18))
+        # Fundido corto: con pantallas translúcidas un deslizamiento superpondría contenidos.
+        self.sm = MDScreenManager(transition=FadeTransition(duration=0.14))
         self.home = HomeScreen(name="home")
-        self.observation = ObservationScreen(name="observation")
-        self.variety = VarietyScreen(name="variety")
-        self.ailab = AILabScreen(name="ailab")
-        for s in (self.home, self.observation, self.variety, self.ailab):
-            self.sm.add_widget(s)
+        self.sm.add_widget(self.home)  # el resto de pantallas se crea al primer uso
         Window.bind(on_keyboard=self._on_keyboard)
-        return self.sm
+        Window.clearcolor = theme.c("#F3F7F2")
+        # Fondo difuminado verde/frambuesa detrás de todas las pantallas translúcidas.
+        root = FloatLayout()
+        root.add_widget(Image(source=theme.BACKGROUND, fit_mode="fill"))
+        root.add_widget(self.sm)
+        return root
+
+    # --------------------------------------- carga diferida (arranque rápido)
+    @cached_property
+    def classifier(self):
+        from ai_classifier import PhenologyClassifier  # numpy: solo al usar la IA
+        return PhenologyClassifier(self.db)
+
+    @cached_property
+    def pin(self):
+        from ai_classifier import PinGuard
+        return PinGuard(self.db)
+
+    @cached_property
+    def reports(self):
+        from reporter import ReportGenerator  # Jinja2: solo al generar informes
+        return ReportGenerator(self.db, data_subdir("reports"))
+
+    def _screen(self, cls, name):
+        if not self.sm.has_screen(name):
+            self.sm.add_widget(cls(name=name))
+        return self.sm.get_screen(name)
+
+    @property
+    def observation(self):
+        return self._screen(ObservationScreen, "observation")
+
+    @property
+    def variety(self):
+        return self._screen(VarietyScreen, "variety")
+
+    @property
+    def ailab(self):
+        return self._screen(AILabScreen, "ailab")
+
+    @property
+    def settings(self):
+        return self._screen(SettingsScreen, "settings")
 
     def on_start(self):
         self.home.refresh_current()
+        # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
+        Clock.schedule_once(lambda *_: self.observation, 2.5)
         request_runtime_permissions()
         self.reminders.apply()
         Clock.schedule_interval(lambda *_: self._check_reminder(), 60)
@@ -90,20 +136,22 @@ class FenoRubusApp(MDApp):
 
     # ------------------------------------------------------- navegación
     def go(self, name: str, direction: str = "left"):
+        if not self.sm.has_screen(name):
+            getattr(self, name)  # carga diferida de la pantalla
         if self.sm.current != name:
             self._history.append(self.sm.current)
-        self.sm.transition.direction = direction
         self.sm.current = name
 
     def back(self):
         target = self._history.pop() if self._history else "home"
-        self.sm.transition.direction = "right"
         self.sm.current = target
         if target == "home":
             self.refresh_home()
 
     def _on_keyboard(self, _window, key, *_args):
         if key == 27:  # botón «atrás» de Android / Esc
+            if self.media.close_preview():  # cierra la vista previa del informe
+                return True
             if self._file_manager and self._file_manager._window_manager_open:
                 self._file_manager.close()
                 return True
@@ -124,6 +172,9 @@ class FenoRubusApp(MDApp):
         self.variety.load(variety_id)
         self.go("variety")
 
+    def open_settings(self):
+        self.go("settings")
+
     def open_ai_lab(self):
         """Módulo de calibración: requiere PIN (por defecto 1234)."""
         form = PinForm()
@@ -143,8 +194,8 @@ class FenoRubusApp(MDApp):
     # ---------------------------------------------------------- utilidades
     def toast(self, text: str):
         MDSnackbar(MDLabel(text=text, theme_text_color="Custom", text_color=(1, 1, 1, 1)),
-                   md_bg_color=theme.c(theme.SLATE), y=dp(24), pos_hint={"center_x": .5},
-                   size_hint_x=.92, duration=2.5).open()
+                   md_bg_color=theme.c(theme.LEAF_DARK, .94), radius=[dp(18)] * 4,
+                   y=dp(108), pos_hint={"center_x": .5}, size_hint_x=.9, duration=2.5).open()
 
     def _thumb_dest(self, path: str, size: int) -> str | None:
         try:

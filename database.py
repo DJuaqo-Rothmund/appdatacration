@@ -189,6 +189,10 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        # WAL + NORMAL: escrituras mucho más rápidas en memorias flash lentas,
+        # sin riesgo de corrupción (solo podría perderse la última transacción ante un corte).
+        self.conn.execute("PRAGMA synchronous = NORMAL")
+        self.conn.execute("PRAGMA temp_store = MEMORY")
         self.init_schema()
         if seed:
             self.seed_defaults()
@@ -470,6 +474,13 @@ class Database:
             "JOIN sampling_weeks w ON w.id = o.week_id "
             "WHERE o.variety_id=? AND w.season=? AND w.week_number<? AND o.bbch_code IS NOT NULL "
             "ORDER BY w.week_number DESC LIMIT 1", (variety_id, season, week_number))
+
+    def count_observations(self, season: int) -> int:
+        row = self.query_one(
+            "SELECT COUNT(*) AS n FROM observations o JOIN sampling_weeks w ON w.id=o.week_id "
+            "WHERE w.season=? AND (o.bbch_code IS NOT NULL OR EXISTS "
+            "(SELECT 1 FROM photos p WHERE p.observation_id=o.id))", (season,))
+        return row["n"]
 
     # ----------------------------------------------------------------- photos
     def set_photo(self, observation_id: int, kind: str, path: str,
