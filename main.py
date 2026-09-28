@@ -284,6 +284,13 @@ class FenoRubusApp(MDApp):
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo compartir: {exc}")
 
+    def backup_photo(self, photo_id: int, path: str) -> None:
+        """Encola la foto para respaldo en Google Drive (si está activado)."""
+        drive = self.__dict__.get("drive")
+        if drive is None and not self.db.get_setting("drive_enabled", False):
+            return
+        self.drive.enqueue(photo_id, path)
+
     def _check_reminder(self):
         if self.reminders.check_due():
             self.toast("Recordatorio: hoy corresponde el muestreo semanal.")

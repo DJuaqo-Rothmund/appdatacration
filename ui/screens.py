@@ -22,7 +22,8 @@ from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDRectangleFlatButto
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.fitimage import FitImage
 from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.list import OneLineListItem, TwoLineListItem
+from kivymd.uix.gridlayout import MDGridLayout
+from kivymd.uix.list import TwoLineListItem
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.toolbar import MDTopAppBar
@@ -33,6 +34,9 @@ from notifications import FREQUENCIES, can_schedule_exact, request_exact_alarm_p
 from platform_utils import IS_ANDROID, data_subdir, slugify
 from ui import theme
 from ui.theme import c
+
+
+DIALOG_BG = (0.985, 0.992, 0.985, 1)
 
 
 def app() -> "MDApp":
@@ -119,6 +123,53 @@ def open_menu(caller, items: list[tuple[str, callable]], width_mult: int = 5):
     return menu
 
 
+class PickRow(GlassButton):
+    title = StringProperty()
+    subtitle = StringProperty()
+    accent = ColorProperty(c(theme.LEAF_SOFT))
+
+
+def pick_dialog(title: str, items: list[tuple], dark: bool = False):
+    """
+    Lista de selección en un diálogo CENTRADO y a lo ancho (reemplaza al menú
+    desplegable, que se abría desplazado y cortaba los nombres largos).
+    items: (título, subtítulo, callback) o (título, subtítulo, callback, color_acento).
+    """
+    from kivymd.uix.scrollview import MDScrollView
+    dialog = None
+    box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6),
+                      padding=(0, dp(4)))
+    for it in items:
+        head, sub, cb = it[0], it[1], it[2]
+        row = PickRow(title=head, subtitle=sub or "")
+        if len(it) > 3:
+            row.accent = it[3]
+
+        def run(_w, cb=cb):
+            dialog.dismiss()
+            cb()
+
+        row.bind(on_release=run)
+        box.add_widget(row)
+    sv = MDScrollView(size_hint_y=None, height=min(dp(440), dp(64) * len(items) + dp(8)),
+                      do_scroll_x=False)
+    sv.add_widget(box)
+    dialog = MDDialog(title=title, type="custom", content_cls=sv, md_bg_color=DIALOG_BG,
+                      buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
+    dialog.open()
+    return dialog
+
+
+def bbch_pick_items(db, callback, extra: list | None = None) -> list[tuple]:
+    items = list(extra or [])
+    for r in db.list_bbch():
+        bg, _fg = theme.stage_colors(r["code"])
+        items.append((f"BBCH {r['code']:02d} · {r['label']}",
+                      ph.MACRO_STAGES.get(r["code"] // 10, ""),
+                      lambda code=r["code"]: callback(code), bg))
+    return items
+
+
 def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outline"):
     """Marcador inmediato; la miniatura se genera en segundo plano y lo reemplaza."""
     box = GlassCard(md_bg_color=c(theme.LEAF_SOFT, .8), line_color=c("#FFFFFF", .9),
@@ -147,7 +198,7 @@ def confirm(title: str, text: str, actions: list[tuple[str, callable]]):
     buttons += [MDFlatButton(text=t.upper(), theme_text_color="Custom",
                              text_color=c(theme.BERRY if "ELIMIN" in t.upper() else theme.LEAF_DARK),
                              on_release=wrap(cb)) for t, cb in actions]
-    dialog = MDDialog(title=title, text=text, buttons=buttons)
+    dialog = MDDialog(title=title, text=text, buttons=buttons, md_bg_color=DIALOG_BG)
     dialog.open()
     return dialog
 
@@ -159,7 +210,7 @@ def form_dialog(title: str, content, on_ok, ok_text: str = "GUARDAR"):
         if on_ok(content) is not False:
             dialog.dismiss()
 
-    dialog = MDDialog(title=title, type="custom", content_cls=content, buttons=[
+    dialog = MDDialog(title=title, type="custom", content_cls=content, md_bg_color=DIALOG_BG, buttons=[
         MDFlatButton(text="CANCELAR", on_release=lambda *_: dialog.dismiss()),
         MDFlatButton(text=ok_text, theme_text_color="Custom", text_color=c(theme.LEAF_DARK),
                      on_release=_ok)])
@@ -174,7 +225,7 @@ def list_dialog(title: str, rows: list[tuple[str, str]]):
     from kivymd.uix.scrollview import MDScrollView
     sv = MDScrollView(size_hint_y=None, height=dp(420))
     sv.add_widget(box)
-    dialog = MDDialog(title=title, type="custom", content_cls=sv,
+    dialog = MDDialog(title=title, type="custom", content_cls=sv, md_bg_color=DIALOG_BG,
                       buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
     dialog.open()
 
@@ -509,11 +560,17 @@ class VarietyScreen(MDScreen):
 # ===========================================================================
 # Registro fenológico (variedad × semana)
 # ===========================================================================
+class StripThumb(GlassButton):
+    primary = BooleanProperty(False)
+    photo_id = NumericProperty(0)
+
+
 class PhotoSlot(GlassCard):
     kind = StringProperty()
     caption = StringProperty()
     meta = StringProperty("Sin foto")
     has_photo = BooleanProperty(False)
+    count = NumericProperty(0)
     screen = ObjectProperty()
 
     def show_busy(self, text: str = "Procesando foto…"):
@@ -522,20 +579,31 @@ class PhotoSlot(GlassCard):
         fast_clear(box)
         box.add_widget(MDSpinner(size_hint=(None, None), size=(dp(32), dp(32)),
                                  pos_hint={"center_x": .5, "center_y": .5},
-                                 color=c(theme.LEAF)))
+                                 color=c(theme.BERRY)))
         self.meta = text
 
-    def show(self, photo: dict | None):
-        box = self.ids.image_box
+    def show(self, photos: list[dict]):
+        """photos: todas las fotos de este tipo, la principal primero."""
+        box, strip = self.ids.image_box, self.ids.strip
         fast_clear(box)
-        self.has_photo = bool(photo)
-        if photo:
-            box.add_widget(thumb_widget(photo["path"], 640))
-            origin = {"camera": "cámara", "gallery": "galería"}.get(photo["source"], photo["source"])
-            self.meta = f"{origin} · {photo['captured_at'][:16].replace('T', ' ')}"
-        else:
+        fast_clear(strip)
+        self.count = len(photos)
+        self.has_photo = bool(photos)
+        if not photos:
             box.add_widget(thumb_widget(None, icon="camera-plus-outline"))
-            self.meta = "Sin foto"
+            self.meta = "Sin foto · la cámara suma una foto por toma"
+            return
+        main = photos[0]
+        box.add_widget(thumb_widget(main["path"], 640))
+        origin = {"camera": "cámara", "gallery": "galería"}.get(main["source"], main["source"])
+        self.meta = (f"Principal: {origin} · {main['captured_at'][11:16]}"
+                     + (" · toque una miniatura para cambiarla" if len(photos) > 1 else ""))
+        if len(photos) > 1:
+            for ph_ in photos:
+                t = StripThumb(primary=bool(ph_["is_primary"]), photo_id=ph_["id"])
+                t.add_widget(thumb_widget(ph_["path"], 160))
+                t.bind(on_release=lambda w: self.screen.make_primary(self.kind, w.photo_id))
+                strip.add_widget(t)
 
 
 class ObservationScreen(MDScreen):
@@ -552,9 +620,8 @@ class ObservationScreen(MDScreen):
         self.ids.bar.title = self.variety["name"]
         self.ids.week_caption.text = (f"Semana {self.week['week_number']} · {self.week['label']} · "
                                       f"Temporada {self.week['season']}-{self.week['season'] + 1}")
-        photos = a.db.get_photos(self.obs["id"])
-        self.ids.canopy.show(photos.get("canopy"))
-        self.ids.detail.show(photos.get("detail"))
+        self._refresh_slot("canopy")
+        self._refresh_slot("detail")
         self.ids.bbch.text = self.obs["bbch_label"] or (
             ph.bbch_label(self.obs["bbch_code"], a.db.bbch_names())
             if self.obs["bbch_code"] is not None else "")
@@ -600,36 +667,48 @@ class ObservationScreen(MDScreen):
         self.ids.bbch.text = ph.bbch_label(code, app().db.bbch_names())
 
     # -------------------------------------------------------------- fotos
+    def _refresh_slot(self, kind: str):
+        self.ids[kind].show(app().db.list_photos(self.obs["id"], kind))
+
     def capture(self, kind: str, source: str):
+        """Cada toma (o cada foto elegida de la galería) SE SUMA al registro."""
         a = app()
 
-        def done(tmp_path, origin):
-            if not tmp_path:
+        def done(result, origin):
+            paths = [p for p in (result if isinstance(result, list) else [result]) if p]
+            if not paths:
                 if origin == "error":
                     a.toast("No se pudo obtener la foto.")
                 return
             season, n = self.week["season"], self.week["week_number"]
             obs_id = self.obs["id"]
-            self.ids[kind].show_busy()
+            self.ids[kind].show_busy("Procesando foto…" if len(paths) == 1
+                                     else f"Procesando {len(paths)} fotos…")
 
-            def work():  # normalizar y guardar la foto fuera del hilo de la interfaz
+            def work():  # normalizar y guardar fuera del hilo de la interfaz
+                error = None
                 try:
                     dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
-                    path = store_photo(tmp_path, dest_dir, f"{slugify(self.variety['name'])}_{kind}")
-                    a.db.set_photo(obs_id, kind, path, source=origin)
-                    a.thumb(path, 640)
-                    Clock.schedule_once(lambda *_: stored(None))
+                    for tmp in paths:
+                        path = store_photo(tmp, dest_dir, f"{slugify(self.variety['name'])}_{kind}")
+                        pid = a.db.add_photo(obs_id, kind, path, source=origin)
+                        a.thumb(path, 640)
+                        a.thumb(path, 160)
+                        a.backup_photo(pid, path)
                 except Exception as exc:  # noqa: BLE001
                     error = exc
-                    Clock.schedule_once(lambda *_: stored(error))
+                Clock.schedule_once(lambda *_: stored(error))
 
             def stored(error):
                 if self.obs["id"] != obs_id:  # el usuario ya cambió de registro
                     return
-                self.ids[kind].show(a.db.get_photos(obs_id).get(kind))
+                self._refresh_slot(kind)
                 if error:
                     a.toast(f"No se pudo guardar la foto: {error}")
-                elif kind == "detail":
+                    return
+                if origin == "camera":
+                    a.toast("Foto agregada · toque la cámara otra vez para sumar más")
+                if kind == "detail":
                     self.analyze()
 
             a.workers.submit(work)
@@ -639,7 +718,12 @@ class ObservationScreen(MDScreen):
             hint = (f"{slugify(self.variety['name'])}_S{self.week['week_number']:02d}_{label}")
             a.media.take_photo(done, hint)
         else:
-            a.media.pick_image(done)
+            a.media.pick_images(done)
+
+    def make_primary(self, kind: str, photo_id: int):
+        app().db.set_primary(photo_id)
+        self._refresh_slot(kind)
+        app().toast("Foto principal actualizada (es la que aparece en los informes)")
 
     def remove_photo(self, kind: str):
         a = app()
@@ -649,20 +733,22 @@ class ObservationScreen(MDScreen):
 
         def do():
             a.db.delete_photo(photo["id"])
-            self.ids[kind].show(None)
+            self._refresh_slot(kind)
 
-        confirm("Quitar foto", "La foto se desvincula del registro (el archivo se conserva).",
-                [("Quitar", do)])
+        confirm("Quitar la foto principal",
+                "La foto se desvincula del registro (el archivo se conserva en el teléfono). "
+                "Si hay otras fotos, la más reciente pasa a ser la principal.", [("Quitar", do)])
 
     # ----------------------------------------------------------------- IA
     def analyze(self):
         a = app()
-        photo = a.db.get_photos(self.obs["id"]).get("detail")
-        if not photo:
+        details = [p["path"] for p in a.db.list_photos(self.obs["id"], "detail")]
+        if not details:
             a.toast("Primero agregue la foto de detalle (Foto 2).")
             return
         self.ids.spinner.active = True
-        self.ids.ai_label.text = "Analizando foto de detalle…"
+        self.ids.ai_label.text = ("Analizando foto de detalle…" if len(details) == 1
+                                  else f"Analizando {len(details)} fotos de detalle…")
         prev = a.db.previous_observation(self.variety_id, self.week["season"],
                                          self.week["week_number"])
         previous = (prev["bbch_code"], prev["week_number"]) if prev else None
@@ -671,7 +757,7 @@ class ObservationScreen(MDScreen):
 
         def work():
             try:
-                s = a.classifier.suggest(photo["path"], self.week["week_number"], previous, notes)
+                s = a.classifier.suggest(details, self.week["week_number"], previous, notes)
                 a.db.update_observation(obs_id, ai_code=s.code, ai_confidence=s.confidence,
                                         ai_detail=s.as_detail_json())
                 self._analysis_done(s, None)
@@ -698,10 +784,7 @@ class ObservationScreen(MDScreen):
             self._set_bbch(self.obs["ai_code"])
 
     def open_scale(self, caller):
-        a = app()
-        items = [(ph.bbch_label(r["code"], {r["code"]: r["label"]}),
-                  lambda code=r["code"]: self._set_bbch(code)) for r in a.db.list_bbch()]
-        open_menu(caller, items, width_mult=6)
+        pick_dialog("Escala BBCH · frambueso", bbch_pick_items(app().db, self._set_bbch))
 
     # -------------------------------------------------------------- guardar
     def save(self):
@@ -722,6 +805,66 @@ class ObservationScreen(MDScreen):
                 a.classifier.add_reference(photo["path"], code, photo_id=photo["id"])
         a.toast("Registro guardado")
         a.back()
+
+
+# ===========================================================================
+# Widgets gráficos de la vista previa
+# ===========================================================================
+class ProgressRing(Widget):
+    """Anillo de avance (0..1) con el porcentaje al centro."""
+    value = NumericProperty(0)
+    thickness = NumericProperty(dp(9))
+    color = ColorProperty(c(theme.BERRY))
+    track = ColorProperty(c(theme.BERRY_SOFT))
+
+
+class CompletenessGrid(Widget):
+    """Mini-matriz variedad × semana: 2 completo, 1 parcial, 0 vacío."""
+    rows = ListProperty([])
+    weeks = ListProperty([])
+    COLORS = {2: theme.LEAF, 1: theme.BERRY_LIGHT, 0: "#FFFFFF"}
+
+    def on_rows(self, *_):
+        self.height = dp(18) + len(self.rows) * dp(15)
+        self._redraw()
+
+    def on_size(self, *_):
+        self._redraw()
+
+    on_pos = on_size
+
+    def _redraw(self):
+        from kivy.core.text import Label as CoreLabel
+        from kivy.graphics import Color, Rectangle, RoundedRectangle
+        self.canvas.clear()
+        if not self.rows or not self.weeks:
+            return
+        label_w = dp(40)
+        n = len(self.weeks)
+        cw = max(dp(6), (self.width - label_w) / n)
+        ch = dp(12)
+        gap = dp(3)
+        top = self.top - dp(16)
+        with self.canvas:
+            for j, wk in enumerate(self.weeks):   # encabezados de semana (cada 2 si son muchas)
+                if n > 10 and j % 2:
+                    continue
+                t = CoreLabel(text=f"S{wk}", font_size=dp(9))
+                t.refresh()
+                Color(*c(theme.MUTED))
+                Rectangle(texture=t.texture, size=t.texture.size,
+                          pos=(self.x + label_w + j * cw + (cw - t.texture.size[0]) / 2, top + dp(2)))
+            for i, r in enumerate(self.rows):
+                y = top - (i + 1) * (ch + gap)
+                t = CoreLabel(text=str(r["code"])[:6], font_size=dp(9), bold=True)
+                t.refresh()
+                Color(*c(theme.INK_2))
+                Rectangle(texture=t.texture, size=t.texture.size,
+                          pos=(self.x, y + (ch - t.texture.size[1]) / 2))
+                for j, st in enumerate(r["cells"]):
+                    Color(*c(self.COLORS[st], .95 if st else .55))
+                    RoundedRectangle(pos=(self.x + label_w + j * cw + gap / 2, y),
+                                     size=(cw - gap, ch), radius=[dp(3)])
 
 
 # ===========================================================================
@@ -794,8 +937,8 @@ class PreviewTab(MDScreen):
                 self.sel_to, self.sel_month = w, None
             self.refresh()
 
-        open_menu(caller, [(f"S{w['week_number']} · {w['label']}", lambda w=w: choose(w))
-                           for w in reversed(a.db.list_weeks(a.season))])
+        pick_dialog("Semana de muestreo", [(f"Semana {w['week_number']}", w["label"], lambda w=w: choose(w))
+                                            for w in reversed(a.db.list_weeks(a.season))])
 
     def _pick_month(self, caller):
         a = app()
@@ -838,30 +981,31 @@ class PreviewTab(MDScreen):
         args = self._args()
         args.pop("season", None)
         sm = report_summary(a.db, self.kind, a.season, **args)
-        self.ids.sum_title.text = self.KIND_NAMES[self.kind]
-        self.ids.stat_scope.value = f"{sm['varieties']}×{sm['weeks']}"
-        self.ids.stat_photos.value = f"{sm['photos']}/{sm['photos_expected']}"
-        self.ids.stat_bbch.value = f"{sm['bbch']}/{sm['cells']}"
+        ids = self.ids
+        ids.sum_title.text = self.KIND_NAMES[self.kind]
         ratio = sm["complete"] / sm["cells"] if sm["cells"] else 0
-        self.ids.completeness.value = ratio
-        self.ids.completeness_text.text = (f"{ratio:.0%} de los registros completos "
-                                           f"({sm['complete']} de {sm['cells']}) · "
-                                           f"{sm['notes']} con observaciones")
-        if sm["missing"]:
-            shown = sm["missing"][:12]
-            rest = len(sm["missing"]) + sm["missing_more"] - len(shown)
-            self.ids.missing_text.text = ("Datos faltantes:\n• " + "\n• ".join(shown)
-                                          + (f"\n… y {rest} más" if rest else ""))
-        else:
-            self.ids.missing_text.text = "Sin datos faltantes: el informe está completo."
+        ids.ring.value = ratio
+        ids.ring_text.text = f"{ratio:.0%}"
+        ids.metric_photos.text = f"{sm['photos']}/{sm['photos_expected']}"
+        ids.metric_bbch.text = f"{sm['bbch']}/{sm['cells']}"
+        ids.metric_notes.text = str(sm["notes"])
+        ids.grid.weeks = sm["grid"]["weeks"]
+        ids.grid.rows = sm["grid"]["rows"]
+        lack = []
+        if sm["missing_photos"]:
+            lack.append(f"{sm['missing_photos']} foto" + ("s" if sm["missing_photos"] != 1 else ""))
+        if sm["missing_bbch"]:
+            lack.append(f"{sm['missing_bbch']} estado" + ("s" if sm["missing_bbch"] != 1 else ""))
+        ids.lack_text.text = ("Faltan " + " y ".join(lack)) if lack else "Completo"
+        ids.lack_text.text_color = c(theme.BERRY) if lack else c(theme.LEAF)
         mb = sm["est_kb"] / 1024
-        self.ids.size_text.text = (f"Tamaño estimado al compartir (HTML): ~{mb:.1f} MB"
-                                   if mb >= 1 else f"Tamaño estimado al compartir (HTML): ~{sm['est_kb']} KB")
+        ids.size_text.text = f"≈ {mb:.1f} MB" if mb >= 1 else f"≈ {sm['est_kb']} KB"
 
     # ----------------------------------------------------------- vista previa
     def open_preview(self):
         a = app()
         r = a.reports
+        r.include_all_photos = bool(a.db.get_setting("report_all_photos", False))
         args = self._args()
         kind = self.kind
         if kind == "weekly":
@@ -915,8 +1059,12 @@ class ReportsTab(MDScreen):
     sel_variety = ObjectProperty(None, allownone=True)
     sel_month = ObjectProperty(None, allownone=True)
 
+    def set_all_photos(self, active: bool):
+        app().db.set_setting("report_all_photos", bool(active))
+
     def refresh(self):
         a = app()
+        self.ids.all_photos.active = bool(a.db.get_setting("report_all_photos", False))
         weeks = a.db.list_weeks(a.season)
         if not weeks:
             weeks = [a.db.current_week()]
@@ -951,8 +1099,8 @@ class ReportsTab(MDScreen):
                 self.sel_to, self.sel_month = w, None
             self._labels()
 
-        open_menu(caller, [(f"S{w['week_number']} · {w['label']}", lambda w=w: choose(w))
-                           for w in reversed(weeks)])
+        pick_dialog("Semana de muestreo", [(f"Semana {w['week_number']}", w["label"], lambda w=w: choose(w))
+                                            for w in reversed(weeks)])
 
     def pick_month(self, caller):
         a = app()
@@ -981,6 +1129,7 @@ class ReportsTab(MDScreen):
     def generate(self, kind: str, package: str):
         a = app()
         r = a.reports
+        r.include_all_photos = bool(a.db.get_setting("report_all_photos", False))
         if kind == "weekly":
             job = lambda: r.weekly(self.sel_week["id"], package)  # noqa: E731
         elif kind == "period":
@@ -1146,7 +1295,38 @@ class LabelPhotoRow(GlassButton):
     photo = ObjectProperty()
 
 
+class MindSeg(MDRaisedButton):
+    selected = BooleanProperty(False)
+
+
+class MindTopBar(MDTopAppBar):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        Clock.schedule_once(lambda *_: setattr(self, "specific_text_color", c(theme.MIND_TEXT)))
+
+
+class MindRow(GlassButton):
+    title = StringProperty()
+    subtitle = StringProperty()
+    value = StringProperty()
+
+
+class MindOption(GlassButton):
+    title = StringProperty()
+    subtitle = StringProperty()
+    code = NumericProperty(0)
+    result = StringProperty("")   # "", "ok", "bad"
+    locked = BooleanProperty(False)  # ya respondida (sin atenuar el texto como «disabled»)
+
+
+def _mind(cls_name: str, **kw):
+    from kivy.factory import Factory
+    return getattr(Factory, cls_name)(**kw)
+
+
 class AILabScreen(MDScreen):
+    """«Mente del sistema»: desafío diario, etiquetado, modelo y datos históricos."""
+
     def on_pre_enter(self, *_):
         self.refresh()
 
@@ -1155,50 +1335,209 @@ class AILabScreen(MDScreen):
         self.refresh()
 
     def refresh(self):
-        name = self.ids.seg.current
-        getattr(self, f"refresh_{name}")()
+        getattr(self, f"refresh_{self.ids.seg.current}")()
 
-    # ----------------------------------------------------------- documentos
-    def refresh_docs(self):
-        box = self.ids.docs
+    # ======================================================= desafío diario
+    @property
+    def game(self):
+        a = app()
+        if not hasattr(self, "_game"):
+            from ai_game import DailyChallenge
+            self._game = DailyChallenge(a.db, lambda: a.classifier)
+        return self._game
+
+    def refresh_challenge(self):
+        box = self.ids.task_box
+        if not self.game.challenges():
+            fast_clear(box)
+            box.add_widget(self._mind_note("Preparando los desafíos de hoy…"))
+
+            def work():
+                self.game.ensure_today()
+                Clock.schedule_once(lambda *_: self._render_challenge())
+
+            app().workers.submit(work)
+        else:
+            self._render_challenge()
+
+    def _update_header(self):
+        st = self.game.stats()
+        done, total = self.game.progress()
+        self.ids.ch_ring.value = done / total if total else 0
+        self.ids.ch_ring_text.text = f"{done}/{total or 5}"
+        today = _dt.date.today().isoformat()
+        self.ids.ch_title.text = ("¡Desafío completado!" if st.get("last_day") == today
+                                  else "Desafíos cerrados" if total and done == total
+                                  else "Entrena a la IA")
+        self.ids.streak_text.text = f"{st['streak']} día" + ("s" if st["streak"] != 1 else "")
+        acc = f" · {st['accuracy']:.0%} aciertos" if st["accuracy"] is not None else ""
+        self.ids.xp_text.text = f"Nivel {st['level']} · {st['xp']} XP{acc}"
+        self.ids.level_bar.value = st["level_progress"]
+
+    def _mind_note(self, text):
+        card = _mind("MindCard")
+        card.add_widget(_mind("MindText", text=text))
+        return card
+
+    def _render_challenge(self):
+        self._update_header()
+        box = self.ids.task_box
         fast_clear(box)
-        for d in app().db.list_documents():
-            item = TwoLineListItem(
-                text=d["title"],
-                secondary_text=f"{d['stages_found']} claves BBCH · {d['chars']} caracteres · "
-                               f"{d['created_at'][:10]}",
-                on_release=lambda w, d=d: self._doc_menu(d))
-            box.add_widget(item)
+        chs = self.game.challenges()
+        pending = [ch for ch in chs if ch["status"] == "open"]
+        if not pending:
+            st = self.game.stats()
+            card = _mind("MindCard")
+            n_done = sum(ch["status"] == "done" for ch in chs)
+            counted = n_done >= self.game.MIN_DONE_FOR_STREAK
+            card.add_widget(_mind("MindSection", text="HOY COMPLETADO" if counted else "DESAFÍOS CERRADOS"))
+            card.add_widget(MDLabel(text="La IA aprendió de tus respuestas." if counted else
+                                    f"Responde al menos {self.game.MIN_DONE_FOR_STREAK} para sumar racha.",
+                                    font_style="H6", bold=True,
+                                    adaptive_height=True, theme_text_color="Custom",
+                                    text_color=c(theme.MIND_TEXT)))
+            card.add_widget(_mind("MindMuted", text=f"Racha: {st['streak']} día(s) · mejor racha: {st['best']} · "
+                                                    f"{st['xp']} XP. Vuelve mañana por 5 desafíos nuevos."))
+            box.add_widget(card)
+            return
+        ch = pending[0]
+        box.add_widget(self._identify_card(ch) if ch["kind"] == "identify" else self._capture_card(ch))
 
-    def _doc_menu(self, doc):
-        def delete():
-            app().db.delete_document(doc["id"])
-            self.refresh_docs()
-        confirm(doc["title"], "¿Quitar este documento de la base de conocimiento? "
-                              "(la escala BBCH enriquecida se mantiene)", [("Eliminar", delete)])
+    # ---- «¿Qué estado es?»
+    def _identify_card(self, ch):
+        p = ch["payload"]
+        names = app().db.bbch_names()
+        card = _mind("MindCard")
+        card.add_widget(_mind("MindSection", text="¿QUÉ ESTADO ES?"))
+        card.add_widget(_mind("MindMuted", text=f"{p['variety']} · semana {p['week']}"
+                                                + ("" if p.get("truth") is not None
+                                                   else " · foto sin estado: tu respuesta la etiqueta")))
+        img = MDBoxLayout(size_hint_y=None, height=dp(230))
+        img.add_widget(thumb_widget(p["path"], 640))
+        card.add_widget(img)
+        grid = MDGridLayout(cols=2, spacing=dp(8), adaptive_height=True)
+        opts = []
+        for code in p["options"]:
+            o = MindOption(title=f"BBCH {code:02d}", subtitle=names.get(code, ""), code=code)
+            o.bind(on_release=lambda w, ch=ch: self._answer(ch, w, opts))
+            opts.append(o)
+            grid.add_widget(o)
+        card.add_widget(grid)
+        self._skip = self._skip_button(ch)
+        card.add_widget(self._skip)
+        return card
 
-    def import_document(self):
+    def _answer(self, ch, option, opts):
+        if option.locked:
+            return
+        for o in opts:
+            o.locked = True
+        if getattr(self, "_skip", None) is not None and self._skip.parent:
+            self._skip.parent.remove_widget(self._skip)
+        res = self.game.answer_identify(ch["id"], option.code)
+        truth = res["truth"]
+        for o in opts:
+            if truth is not None and o.code == truth:
+                o.result = "ok"
+            elif o is option:
+                o.result = "ok" if res["correct"] in (True, None) else "bad"
+            if not o.result:
+                o.opacity = .45
+        if res["correct"] is None:
+            msg = f"Etiquetada como BBCH {option.code:02d}. +{res['xp']} XP"
+        elif res["correct"]:
+            msg = f"¡Correcto! +{res['xp']} XP"
+        else:
+            msg = f"Era BBCH {truth:02d}. La IA lo aprende igual. +{res['xp']} XP"
+        if res.get("ai") is not None:
+            msg += f" · la IA había pensado BBCH {res['ai']:02d}"
+        self._feedback(msg, res)
+
+    # ---- «Muéstrame este estado»
+    def _capture_card(self, ch):
+        a = app()
+        code = ch["payload"]["target"]
+        row = next((r for r in a.db.list_bbch() if r["code"] == code), None)
+        card = _mind("MindCard")
+        card.add_widget(_mind("MindSection", text="MUÉSTRAME ESTE ESTADO"))
+        card.add_widget(MDLabel(text=f"BBCH {code:02d}", font_style="H4", bold=True, adaptive_height=True,
+                                theme_text_color="Custom", text_color=c(theme.MIND_ACCENT)))
+        card.add_widget(MDLabel(text=row["label"] if row else "", font_style="H6", adaptive_height=True,
+                                theme_text_color="Custom", text_color=c(theme.MIND_TEXT)))
+        if row and row["description"]:
+            card.add_widget(_mind("MindMuted", text=row["description"]))
+        card.add_widget(_mind("MindMuted", text=ph.MACRO_STAGES.get(code // 10, "")))
+        cam = _mind("MindButton", text="Tomar foto")
+        cam.bind(on_release=lambda *_: self._capture(ch, "camera"))
+        gal = _mind("MindGhost", icon="image-outline", text="Elegir de la galería")
+        gal.bind(on_release=lambda *_: self._capture(ch, "gallery"))
+        card.add_widget(cam)
+        card.add_widget(gal)
+        card.add_widget(self._skip_button(ch))
+        return card
+
+    def _capture(self, ch, source):
         a = app()
 
-        def done(path, name):
+        def done(result, _origin):
+            path = result[0] if isinstance(result, list) else result
             if not path:
                 return
-            try:
-                _id, n = a.classifier.import_document(path, title=name or os.path.basename(path))
-            except Exception as exc:  # noqa: BLE001
-                a.toast(f"No se pudo leer el documento: {exc}")
-                return
-            a.toast(f"Documento cargado: {n} claves BBCH detectadas")
-            self.refresh_docs()
+            fast_clear(self.ids.task_box)
+            self.ids.task_box.add_widget(self._mind_note("La IA está mirando la foto…"))
 
-        a.media.pick_document(done)
+            def work():
+                try:
+                    stored = store_photo(path, data_subdir("training"), f"desafio_bbch{ch['payload']['target']:02d}")
+                    res = self.game.complete_capture(ch["id"], stored)
+                    res["path"] = stored
+                    Clock.schedule_once(lambda *_: self._capture_done(res))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: (a.toast(f"No se pudo procesar: {error}"),
+                                                    self._render_challenge()))
 
-    def show_scale(self):
-        rows = [(f"BBCH {r['code']:02d}: {r['label']}", f"[{r['source']}] {r['description']}")
-                for r in app().db.list_bbch()]
-        list_dialog("Escala BBCH · frambueso", rows)
+            a.workers.submit(work)
 
-    # ------------------------------------------------------------ etiquetado
+        if source == "camera":
+            a.media.take_photo(done, f"entrenamiento_BBCH{ch['payload']['target']:02d}")
+        else:
+            a.media.pick_image(done)
+
+    def _capture_done(self, res):
+        fast_clear(self.ids.task_box)
+        card = _mind("MindCard")
+        img = MDBoxLayout(size_hint_y=None, height=dp(200))
+        img.add_widget(thumb_widget(res["path"], 640))
+        card.add_widget(img)
+        seen = f"La IA vio BBCH {res['ai']:02d}"
+        verdict = " — ¡coincide con el estadio!" if res["agree"] else " — ahora aprende tu ejemplo"
+        self.ids.task_box.add_widget(card)
+        self._feedback(f"{seen}{verdict}. +{res['xp']} XP", res, container=card)
+
+    # ---- comunes
+    def _skip_button(self, ch):
+        b = MDFlatButton(text="SALTAR", theme_text_color="Custom", text_color=c(theme.MIND_MUTED),
+                         pos_hint={"center_x": .5})
+        b.bind(on_release=lambda *_: (self.game.skip(ch["id"]), self._render_challenge()))
+        return b
+
+    def _feedback(self, msg, res, container=None):
+        self._update_header()
+        card = container or _mind("MindCard")
+        card.add_widget(MDLabel(text=msg, font_style="Subtitle1", bold=True, adaptive_height=True,
+                                theme_text_color="Custom",
+                                text_color=c(theme.MIND_BAD if res.get("correct") is False else theme.MIND_OK)))
+        if res.get("day_done"):
+            card.add_widget(_mind("MindMuted", text=f"¡Desafío del día completado! Racha: "
+                                                    f"{res['stats']['streak']} día(s)."))
+        nxt = _mind("MindButton", text="Siguiente")
+        nxt.bind(on_release=lambda *_: self._render_challenge())
+        card.add_widget(nxt)
+        if container is None:
+            self.ids.task_box.add_widget(card)
+
+    # ============================================================ etiquetado
     def refresh_label(self):
         a = app()
         self.ids.auto_learn.active = bool(a.db.get_setting("ai_auto_learn", False))
@@ -1218,11 +1557,10 @@ class AILabScreen(MDScreen):
         if len(photos) > limit:
             box.add_widget(MDFlatButton(
                 text=f"MOSTRAR MÁS ({len(photos) - limit} restantes)", pos_hint={"center_x": .5},
-                theme_text_color="Custom", text_color=c(theme.LEAF_DARK),
+                theme_text_color="Custom", text_color=c(theme.MIND_ACCENT),
                 on_release=lambda *_: self._more_labels()))
         if not photos:
-            box.add_widget(MDLabel(text="No hay fotos de detalle en la temporada.",
-                                   font_style="Caption", adaptive_height=True))
+            box.add_widget(self._mind_note("No hay fotos de detalle en la temporada."))
 
     def _more_labels(self):
         self._label_limit = getattr(self, "_label_limit", 12) + 12
@@ -1243,13 +1581,11 @@ class AILabScreen(MDScreen):
             a.toast(f"Referencia agregada: BBCH {code:02d}")
             self.refresh_label()
 
-        items = []
+        extra = []
         if photo["bbch_code"] is not None:
-            items.append((f"✓ Usar registro: BBCH {photo['bbch_code']:02d}",
-                          lambda: assign(photo["bbch_code"])))
-        items += [(ph.bbch_label(r["code"], {r["code"]: r["label"]}), lambda code=r["code"]: assign(code))
-                  for r in a.db.list_bbch()]
-        open_menu(caller, items, width_mult=6)
+            extra.append((f"✓ Usar el registro: BBCH {photo['bbch_code']:02d}",
+                          "Estado ya asignado en el muestreo", lambda: assign(photo["bbch_code"])))
+        pick_dialog("¿Qué estado muestra la foto?", bbch_pick_items(a.db, assign, extra))
 
     def add_all_labeled(self):
         a = app()
@@ -1265,32 +1601,32 @@ class AILabScreen(MDScreen):
             Clock.schedule_once(lambda *_: (a.toast(f"{len(todo)} referencias agregadas"),
                                             self.refresh_label()))
 
-        threading.Thread(target=work, daemon=True).start()
+        a.workers.submit(work)
         a.toast(f"Procesando {len(todo)} fotos…")
 
-    # ---------------------------------------------------------------- modelo
+    # ================================================================ modelo
     def refresh_model(self):
         a = app()
         ext = a.classifier.extractor
         counts = a.db.reference_counts()
-        self.ids.model_text.text = (f"Extractor: {ext.name} · {ext.dim} dimensiones\n"
-                                    f"k-NN coseno (k={a.classifier.K}) + priors temporal, "
-                                    f"cromático y textual · {sum(counts.values())} referencias")
+        self.ids.model_text.text = (f"{ext.name} · {ext.dim} dimensiones · k-NN coseno "
+                                    f"(k={a.classifier.K}) + priors · {sum(counts.values())} referencias")
         box = self.ids.counts
         fast_clear(box)
         names = a.db.bbch_names()
         for code in sorted(counts):
-            box.add_widget(OneLineListItem(text=f"{ph.bbch_label(code, names)} — {counts[code]}"))
+            box.add_widget(MindRow(title=f"BBCH {code:02d}", subtitle=names.get(code, ""),
+                                   value=str(counts[code])))
         if not counts:
-            box.add_widget(MDLabel(text="Sin referencias: la IA usa solo los priors agronómicos.",
-                                   font_style="Caption", adaptive_height=True))
+            box.add_widget(_mind("MindMuted", text="Sin referencias: la IA usa solo los priors agronómicos."))
 
     def evaluate(self):
         ev = app().classifier.evaluate()
         if ev["exact"] is None:
             self.ids.eval_text.text = "Se necesitan al menos 3 referencias para evaluar."
         else:
-            self.ids.eval_text.text = (f"Validación leave-one-out (n={ev['n']}): exactitud código "
+            app().db.set_setting("ai_last_eval", ev)
+            self.ids.eval_text.text = (f"Validación leave-one-out (n={ev['n']}): código exacto "
                                        f"{ev['exact']:.0%} · estadio principal {ev['macro']:.0%}")
 
     def retrain(self):
@@ -1304,7 +1640,7 @@ class AILabScreen(MDScreen):
             Clock.schedule_once(lambda *_: (a.toast(f"{n} embeddings recalculados"),
                                             self.refresh_model()))
 
-        threading.Thread(target=work, daemon=True).start()
+        a.workers.submit(work)
 
     def try_photo(self):
         a = app()
@@ -1365,3 +1701,95 @@ class AILabScreen(MDScreen):
             a.toast("PIN actualizado")
 
         form_dialog("Cambiar PIN", box, ok)
+
+    # ================================================================= datos
+    def refresh_data(self):
+        box = self.ids.docs
+        fast_clear(box)
+        for d in app().db.list_documents():
+            row = MindRow(title=d["title"], subtitle=f"{d['created_at'][:10]} · {d['chars']} caracteres",
+                          value=f"{d['stages_found']}")
+            row.bind(on_release=lambda w, d=d: self._doc_menu(d))
+            box.add_widget(row)
+        last = app().db.get_setting("last_import")
+        if last and not self.ids.import_text.text:
+            self.ids.import_text.text = f"Última importación: {last}"
+
+    def _doc_menu(self, doc):
+        def delete():
+            app().db.delete_document(doc["id"])
+            self.refresh_data()
+        confirm(doc["title"], "¿Quitar este documento de la base de conocimiento? "
+                              "(la escala BBCH enriquecida se mantiene)", [("Eliminar", delete)])
+
+    def import_document(self):
+        a = app()
+
+        def done(path, name):
+            if not path:
+                return
+            try:
+                _id, n = a.classifier.import_document(path, title=name or os.path.basename(path))
+            except Exception as exc:  # noqa: BLE001
+                a.toast(f"No se pudo leer el documento: {exc}")
+                return
+            a.toast(f"Documento cargado: {n} claves BBCH detectadas")
+            self.refresh_data()
+
+        a.media.pick_document(done)
+
+    def show_scale(self):
+        rows = [(f"BBCH {r['code']:02d}: {r['label']}", f"[{r['source']}] {r['description']}")
+                for r in app().db.list_bbch()]
+        list_dialog("Escala BBCH · frambueso", rows)
+
+    def save_template(self):
+        from importer import write_template
+        a = app()
+        path = write_template(os.path.join(data_subdir("tmp"), "plantilla_historico_phenorubus.csv"))
+        try:
+            a.media.export_to_downloads(path, "text/csv")
+            a.toast("Plantilla guardada en Descargas/PhenoRubus")
+        except Exception as exc:  # noqa: BLE001
+            a.toast(f"No se pudo guardar: {exc}")
+
+    def import_history(self):
+        a = app()
+
+        def done(path, name):
+            if not path:
+                return
+            if not path.lower().endswith((".csv", ".zip")):
+                a.toast("Elija un archivo .csv o .zip")
+                return
+            train = self.ids.train_import.active
+            self.ids.import_btn.disabled = True
+            self.ids.import_text.text = f"Importando {name or os.path.basename(path)}…"
+
+            def progress(i, n):
+                Clock.schedule_once(lambda *_: setattr(self.ids.import_progress, "value", i / max(1, n)))
+
+            def work():
+                from importer import import_file
+                try:
+                    res = import_file(a.db, path, classifier=a.classifier if train else None,
+                                      train_ai=train, progress=progress)
+                    Clock.schedule_once(lambda *_: self._import_done(res, None))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: self._import_done(None, error))
+
+            a.workers.submit(work)
+
+        a.media.pick_document(done)
+
+    def _import_done(self, res, error):
+        self.ids.import_btn.disabled = False
+        if error:
+            self.ids.import_text.text = f"No se pudo importar: {error}"
+            return
+        summary = res.summary()
+        app().db.set_setting("last_import", summary)
+        errs = (f"\n{len(res.errors)} advertencia(s): " + "; ".join(res.errors[:3])) if res.errors else ""
+        self.ids.import_text.text = f"Importado: {summary}{errs}"
+        app().toast("Importación terminada")

@@ -32,6 +32,8 @@ PUBLIC_PHOTO_DIR = "Imágenes de Fenología"
 RC_CAMERA = 0x4631
 RC_GALLERY = 0x4632
 RC_DOCUMENT = 0x4633
+RC_GALLERY_MULTI = 0x4634
+MAX_MULTI = 10
 
 PhotoCallback = Callable[[str | None, str], None]   # (ruta_temporal | None, origen)
 
@@ -194,6 +196,19 @@ class AndroidMedia:
         self._pending[RC_GALLERY] = (callback, None)
         self.activity.startActivityForResult(intent, RC_GALLERY)
 
+    def pick_images(self, callback: Callable[[list, str], None]) -> None:
+        """Selección múltiple (hasta 10). callback(lista_de_rutas, "gallery")."""
+        if self.api >= 33:
+            intent = self.Intent(self.MediaStore.ACTION_PICK_IMAGES)
+            intent.putExtra(self.MediaStore.EXTRA_PICK_IMAGES_MAX, MAX_MULTI)
+        else:
+            intent = self.Intent(self.Intent.ACTION_GET_CONTENT)
+            intent.addCategory(self.Intent.CATEGORY_OPENABLE)
+            intent.putExtra(self.Intent.EXTRA_ALLOW_MULTIPLE, True)
+        intent.setType("image/*")
+        self._pending[RC_GALLERY_MULTI] = (callback, None)
+        self.activity.startActivityForResult(intent, RC_GALLERY_MULTI)
+
     def pick_document(self, callback: Callable[[str | None, str], None]) -> None:
         intent = self.Intent(self.Intent.ACTION_OPEN_DOCUMENT)
         intent.addCategory(self.Intent.CATEGORY_OPENABLE)
@@ -223,8 +238,22 @@ class AndroidMedia:
                 if not ok:
                     self.resolver.delete(uri, None, None)
                     return self._dispatch(callback, None, "camera")
-                dest = os.path.join(self.tmp_dir, "camera_capture.jpg")
+                stamp = _dt.datetime.now().strftime("%H%M%S%f")
+                dest = os.path.join(self.tmp_dir, f"camera_{stamp}.jpg")
                 return self._dispatch(callback, self._copy_uri_to_file(uri, dest), "camera")
+            if request_code == RC_GALLERY_MULTI:
+                uris = []
+                if ok and intent is not None:
+                    clip = intent.getClipData()
+                    if clip is not None:
+                        uris = [clip.getItemAt(i).getUri() for i in range(min(clip.getItemCount(), MAX_MULTI))]
+                    elif intent.getData() is not None:
+                        uris = [intent.getData()]
+                paths = []
+                for i, u in enumerate(uris):
+                    dest = os.path.join(self.tmp_dir, f"gallery_{i:02d}_{_dt.datetime.now():%H%M%S%f}.jpg")
+                    paths.append(self._copy_uri_to_file(u, dest))
+                return self._dispatch(callback, paths, "gallery")
             if not ok or intent is None or intent.getData() is None:
                 return self._dispatch(callback, None,
                                       "gallery" if request_code == RC_GALLERY else "")
@@ -357,7 +386,7 @@ class AndroidWebPreview:
             bar.addView(close, LLParams(VGParams.WRAP_CONTENT, VGParams.WRAP_CONTENT))
             wv = WebView(activity)
             st = wv.getSettings()
-            st.setJavaScriptEnabled(False)
+            st.setJavaScriptEnabled(True)  # gráfico interactivo (solo contenido local)
             st.setAllowFileAccess(True)
             st.setBuiltInZoomControls(True)
             st.setDisplayZoomControls(False)
@@ -428,6 +457,9 @@ class DesktopMedia:
 
     def pick_image(self, callback: PhotoCallback) -> None:
         self.file_chooser(lambda p: callback(p, "gallery"), (".jpg", ".jpeg", ".png"))
+
+    def pick_images(self, callback) -> None:
+        self.file_chooser(lambda p: callback([p] if p else [], "gallery"), (".jpg", ".jpeg", ".png"))
 
     def pick_document(self, callback) -> None:
         self.file_chooser(lambda p: callback(p, os.path.basename(p) if p else ""),

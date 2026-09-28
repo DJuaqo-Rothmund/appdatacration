@@ -21,6 +21,7 @@ Empaquetado
 from __future__ import annotations
 
 import base64
+from html import escape
 import datetime as _dt
 import io
 import json
@@ -171,6 +172,83 @@ def svg_progress(points: list[tuple[int, int]], week_min: int, week_max: int,
 
 
 # ===========================================================================
+# Gráfico comparativo interactivo: semana (x) vs estado BBCH (y)
+# ===========================================================================
+BANDS = [(0, 9, "Yemas"), (10, 19, "Hojas"), (30, 39, "Brotes"), (50, 59, "Botón floral"),
+         (60, 69, "Floración"), (70, 79, "Fruto"), (80, 89, "Maduración"), (90, 99, "Senescencia")]
+MAX_SELECTED = 4
+
+
+def compare_chart(series: list[dict], week_min: int, week_max: int,
+                  selected_ids: list[int]) -> dict | None:
+    """
+    series: [{"id", "name", "points": [(semana, bbch), ...]}]. Todas las variedades se
+    dibujan como contexto gris; las seleccionadas (máx. 4) en color con etiqueta
+    directa. El estado inicial es SVG estático (funciona sin JavaScript); el script
+    del informe permite cambiar la selección y muestra un tooltip por semana.
+    """
+    series = [s_ for s_ in series if s_["points"]]
+    if not series:
+        return None
+    week_max = max(week_max, week_min + 1)
+    W, H = 720, 320
+    pl, pr, pt, pb = 92, 96, 14, 30
+    w, h = W - pl - pr, H - pt - pb
+
+    def x(wk):
+        return pl + (wk - week_min) / (week_max - week_min) * w
+
+    def y(code):
+        return pt + (1 - code / 99.0) * h
+
+    out = [f'<svg class="cmp" viewBox="0 0 {W} {H}" role="img" '
+           f'aria-label="Estado BBCH por semana, comparación entre variedades">']
+    for i, (lo, hi, name) in enumerate(BANDS):
+        out.append(f'<rect class="band{" alt" if i % 2 else ""}" x="{pl}" y="{y(hi + .5):.1f}" '
+                   f'width="{w}" height="{y(lo - .5) - y(hi + .5):.1f}"/>'
+                   f'<text class="band-l" x="{pl - 8}" y="{(y(lo) + y(hi)) / 2 + 4:.1f}" '
+                   f'text-anchor="end">{name}</text>')
+    step = 1 if week_max - week_min <= 14 else (2 if week_max - week_min <= 28 else 4)
+    for wk in range(week_min, week_max + 1, step):
+        out.append(f'<text class="tick" x="{x(wk):.1f}" y="{H - 10}" text-anchor="middle">S{wk}</text>')
+    sel = [i for i in selected_ids if any(s_["id"] == i for s_ in series)][:MAX_SELECTED]
+    ordered = sorted(series, key=lambda s_: s_["id"] in sel)  # seleccionadas al frente
+    for s_ in ordered:
+        pts = sorted(s_["points"])
+        on = s_["id"] in sel
+        slot = sel.index(s_["id"]) + 1 if on else 0
+        d = " ".join(f"{'M' if i == 0 else 'L'}{x(wk):.1f},{y(c):.1f}" for i, (wk, c) in enumerate(pts))
+        out.append(f'<g class="series {"on s" + str(slot) if on else "off"}" data-id="{s_["id"]}">'
+                   f'<path d="{d}"/>')
+        for wk, c in pts:
+            out.append(f'<circle class="dot" cx="{x(wk):.1f}" cy="{y(c):.1f}" r="4">'
+                       f'<title>{escape(s_["name"])} · Semana {wk} · {ph.bbch_label(c)}</title></circle>')
+        lw, lc = pts[-1]
+        out.append(f'<text class="end" x="{x(lw) + 8:.1f}" y="{y(lc) + 4:.1f}">{escape(s_["name"])}</text></g>')
+    out.append(f'<line class="xhair" x1="0" x2="0" y1="{pt}" y2="{pt + h}"/>'
+               f'<rect class="hit" x="{pl}" y="{pt}" width="{w}" height="{h}"/></svg>')
+    data = {str(s_["id"]): {"name": s_["name"], "pts": {str(wk): c for wk, c in s_["points"]}}
+            for s_ in series}
+    return {"svg": "".join(out), "chips": [{"id": s_["id"], "name": s_["name"],
+                                            "slot": sel.index(s_["id"]) + 1 if s_["id"] in sel else 0}
+                                           for s_ in series],
+            "json": json.dumps({"series": data, "wmin": week_min, "wmax": week_max,
+                                "pl": pl, "w": w, "vw": W}, ensure_ascii=False).replace("</", "<\\/")}
+
+
+def _default_selection(heat_rows: list[dict], k: int = 2) -> list[int]:
+    """Por defecto: la variedad más adelantada y la más tardía (último estado)."""
+    last = [(r["variety"]["id"], next((c["code"] for c in reversed(r["cells"])
+                                       if c["code"] is not None), None)) for r in heat_rows]
+    last = [t for t in last if t[1] is not None]
+    if not last:
+        return []
+    last.sort(key=lambda t: t[1])
+    ids = [last[-1][0], last[0][0]]
+    return list(dict.fromkeys(ids))[:k]
+
+
+# ===========================================================================
 # Generador
 # ===========================================================================
 @dataclass
@@ -238,6 +316,14 @@ class ReportGenerator:
         self.db.log("create", "report", None, f"{kind}: {os.path.basename(path)}")
         return ReportResult(path, title, kind, max(1, os.path.getsize(path) // 1024))
 
+    include_all_photos = False  # True: agrega las fotos no principales como miniaturas
+
+    def _extras(self, obs: dict | None, images: ImageStore) -> list[str]:
+        if not (self.include_all_photos and obs):
+            return []
+        return [src for p in self.db.list_photos(obs["id"]) if not p["is_primary"]
+                for src in [images.src(p["path"], 360)] if src]
+
     def _photo_ctx(self, photos: dict, images: ImageStore, max_side: int | None = None) -> dict:
         return {kind: images.src(photos[kind]["path"], max_side) if kind in photos else None
                 for kind, _ in PHOTO_KINDS}
@@ -249,6 +335,15 @@ class ReportGenerator:
         return {"code": obs["bbch_code"], "notes": obs["notes"] or "",
                 "ai_code": obs["ai_code"], "ai_conf": obs["ai_confidence"],
                 "ai_accepted": obs["ai_accepted"], "observed_at": obs["observed_at"]}
+
+    def _compare(self, heat: list[dict], weeks: list[dict], selected: list[int] | None = None):
+        if len(weeks) < 2:
+            return None
+        series = [{"id": r["variety"]["id"], "name": r["variety"]["name"],
+                   "points": [(c["week"]["week_number"], c["code"]) for c in r["cells"]
+                              if c["code"] is not None]} for r in heat]
+        sel = selected if selected is not None else _default_selection(heat)
+        return compare_chart(series, weeks[0]["week_number"], weeks[-1]["week_number"], sel)
 
     def _heatmap(self, season: int, weeks: list[dict], varieties: list[dict]) -> list[dict]:
         matrix = self.db.phenology_matrix(season)
@@ -268,7 +363,8 @@ class ReportGenerator:
         cards = []
         for row in self.db.week_overview(week_id):
             cards.append({"variety": row["variety"], **self._obs_ctx(row["observation"]),
-                          "img": self._photo_ctx(row["photos"], images)})
+                          "img": self._photo_ctx(row["photos"], images),
+                          "extras": self._extras(row["observation"], images)})
         done = sum(1 for c in cards if c["code"] is not None)
         title = f"Reporte semanal · Semana {week['week_number']}"
         return self._render(
@@ -305,7 +401,7 @@ class ReportGenerator:
         title = title or f"Evolución · Semanas {week_from}–{week_to}"
         return self._render(
             "period.html", f"periodo_T{season}_S{week_from:02d}-S{week_to:02d}", "periodo",
-            title, images, package, weeks=weeks, heat=heat, strips=strips,
+            title, images, package, weeks=weeks, heat=heat, strips=strips, compare=self._compare(heat, weeks),
             subtitle=f"Del {ph.format_date_es(start, False)} al {ph.format_date_es(end)} · "
                      f"Temporada {season}-{season + 1}")
 
@@ -326,7 +422,8 @@ class ReportGenerator:
         for o in self.db.variety_timeline(variety_id, season):
             timeline.append({"week_number": o["week_number"], "week_label": o["week_label"],
                              "start_date": o["start_date"], **self._obs_ctx(o),
-                             "img": self._photo_ctx(o["photos"], images)})
+                             "img": self._photo_ctx(o["photos"], images),
+                             "extras": self._extras(o, images)})
         pts = [(t["week_number"], t["code"]) for t in timeline if t["code"] is not None]
         chart = svg_progress(pts, min(p[0] for p in pts), max(max(p[0] for p in pts),
                              min(p[0] for p in pts) + 1)) if pts else ""
@@ -336,10 +433,14 @@ class ReportGenerator:
             milestones.append({"code": code, "name": name, "week": hit[0] if hit else None})
         metrics = self.db.get_metrics(variety_id, season)
         custom = self.db.list_custom_fields(variety_id, season)
+        all_weeks = self.db.list_weeks(season)
+        compare = self._compare(self._heatmap(season, all_weeks, self.db.list_varieties()),
+                                all_weeks, [variety_id])
         title = f"Ficha fenológica · {v['name']}"
         return self._render(
             "variety.html", f"variedad_{slugify(v['name'])}_T{season}", "variedad", title,
             images, package, variety=v, timeline=timeline, chart=chart, metrics=metrics,
+            compare=compare,
             custom=custom, milestones=milestones,
             subtitle=f"Timeline longitudinal · Temporada {season}-{season + 1}")
 
@@ -388,7 +489,7 @@ class ReportGenerator:
         title = "Matriz comparativa inter-varietal"
         return self._render(
             "matrix.html", f"matriz_T{season}", "matriz", title, images, package,
-            weeks=weeks, heat=heat, rows=rows, ranking=ranking, max_abs=max_abs,
+            weeks=weeks, heat=heat, rows=rows, compare=self._compare(heat, weeks), ranking=ranking, max_abs=max_abs,
             milestones=MILESTONES,
             subtitle=f"Avance fenológico relativo · Temporada {season}-{season + 1} · "
                      f"Semanas {wmin}–{wmax}",
@@ -426,17 +527,21 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
         weeks = [w for w in weeks if week_from <= w["week_number"] <= week_to]
     elif kind == "variety":
         varieties = [v for v in varieties if v["id"] == variety_id]
-    cells = complete = photos = bbch = notes = 0
+    cells = complete = photos = bbch = notes = miss_photos = 0
     missing: list[str] = []
+    grid = {v["id"]: [] for v in varieties}
     for w in weeks:
         for v in varieties:
             obs = db.get_observation(v["id"], w["id"])
             ph_ = db.get_photos(obs["id"]) if obs else {}
             cells += 1
             photos += len(ph_)
-            bbch += bool(obs and obs["bbch_code"] is not None)
+            miss_photos += 2 - len(ph_)
+            has_bbch = bool(obs and obs["bbch_code"] is not None)
+            bbch += has_bbch
             notes += bool(obs and (obs["notes"] or "").strip())
             lack = _missing_items(obs, ph_)
+            grid[v["id"]].append(2 if not lack else (1 if (ph_ or has_bbch) else 0))
             if not lack:
                 complete += 1
             elif len(missing) < 40:
@@ -446,4 +551,8 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
             "complete": complete, "photos": photos, "photos_expected": cells * 2,
             "bbch": bbch, "notes": notes, "missing": missing,
             "missing_more": max(0, total_missing - len(missing)),
-            "est_kb": 40 + photos * EST_KB_PER_PHOTO}
+            "missing_photos": miss_photos, "missing_bbch": cells - bbch,
+            "grid": {"weeks": [w["week_number"] for w in weeks],
+                     "rows": [{"name": v["name"], "code": v["code"] or v["name"][:3],
+                               "cells": grid[v["id"]]} for v in varieties]},
+            "est_kb": 40 + {"period": cells * 35, "matrix": cells * 22}.get(kind, photos * EST_KB_PER_PHOTO)}

@@ -43,3 +43,83 @@
 </div>
 <div class="legend-seq"><span>BBCH 00</span><span class="bar"></span><span>BBCH 99</span><span>· celda = código BBCH registrado; «·» = sin registro</span></div>
 {%- endmacro %}
+
+{% macro compare_chart(cmp, uid) -%}
+{% if cmp %}
+<div class="cmp-wrap" id="{{ uid }}">
+  <div class="cmp-chips" role="group" aria-label="Variedades a comparar (máx. 4)">
+    {% for ch in cmp.chips %}
+    <button type="button" class="chip-s{% if ch.slot %} on s{{ ch.slot }}{% endif %}" data-id="{{ ch.id }}" aria-pressed="{{ 'true' if ch.slot else 'false' }}"><span class="key"></span>{{ ch.name }}</button>
+    {% endfor %}
+  </div>
+  <div class="cmp-fig card">
+    {{ cmp.svg|safe }}
+    <div class="cmp-tip" hidden></div>
+  </div>
+  <p class="small muted cmp-note">Toque una variedad para agregarla o quitarla de la comparación (máx. 4). En gris, el resto como referencia.</p>
+  <script type="application/json" class="cmp-data">{{ cmp.json|safe }}</script>
+</div>
+<script>
+(function () {
+  var root = document.getElementById("{{ uid }}");
+  if (!root) return;
+  var data = JSON.parse(root.querySelector(".cmp-data").textContent);
+  var svg = root.querySelector("svg.cmp"), tip = root.querySelector(".cmp-tip");
+  var slots = {};                     // id -> ranura de color (1..4), estable mientras siga elegida
+  root.querySelectorAll(".chip-s.on").forEach(function (b) {
+    slots[b.dataset.id] = +(b.className.match(/s(\d)/) || [0, 0])[1];
+  });
+  function free() { for (var s = 1; s <= 4; s++) { var used = false;
+      for (var k in slots) if (slots[k] === s) used = true; if (!used) return s; } return 0; }
+  function paint() {
+    root.querySelectorAll(".chip-s").forEach(function (b) {
+      var s = slots[b.dataset.id];
+      b.className = "chip-s" + (s ? " on s" + s : "");
+      b.setAttribute("aria-pressed", s ? "true" : "false");
+    });
+    svg.querySelectorAll("g.series").forEach(function (g) {
+      var s = slots[g.dataset.id];
+      g.setAttribute("class", "series " + (s ? "on s" + s : "off"));
+      if (s) g.parentNode.insertBefore(g, svg.querySelector(".xhair"));   // al frente
+    });
+  }
+  root.querySelectorAll(".chip-s").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var id = b.dataset.id;
+      if (slots[id]) { delete slots[id]; }
+      else { var s = free(); if (!s) return; slots[id] = s; }
+      paint();
+    });
+  });
+  var hit = svg.querySelector(".hit"), xh = svg.querySelector(".xhair");
+  function move(ev) {
+    var r = svg.getBoundingClientRect(), k = data.vw / r.width;
+    var px = (ev.clientX - r.left) * k;
+    var wk = Math.round(data.wmin + (px - data.pl) / data.w * (data.wmax - data.wmin));
+    wk = Math.max(data.wmin, Math.min(data.wmax, wk));
+    var xv = data.pl + (wk - data.wmin) / (data.wmax - data.wmin) * data.w;
+    xh.setAttribute("x1", xv); xh.setAttribute("x2", xv); xh.style.opacity = 1;
+    tip.textContent = "";
+    var head = document.createElement("div"); head.className = "t-h"; head.textContent = "Semana " + wk; tip.appendChild(head);
+    var ids = Object.keys(slots);
+    if (!ids.length) ids = Object.keys(data.series);
+    ids.forEach(function (id) {
+      var s = data.series[id], v = s.pts[String(wk)];
+      if (v === undefined) return;
+      var row = document.createElement("div"); row.className = "t-r" + (slots[id] ? " s" + slots[id] : "");
+      var key = document.createElement("span"); key.className = "key"; row.appendChild(key);
+      var val = document.createElement("strong"); val.textContent = "BBCH " + (v < 10 ? "0" : "") + v; row.appendChild(val);
+      var nm = document.createElement("span"); nm.textContent = " " + s.name; row.appendChild(nm);
+      tip.appendChild(row);
+    });
+    tip.hidden = false;
+    var fx = (xv / data.vw) * r.width;
+    tip.style.left = Math.min(r.width - 170, Math.max(0, fx + 12)) + "px";
+  }
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", function () { tip.hidden = true; xh.style.opacity = 0; });
+})();
+</script>
+{% endif %}
+{%- endmacro %}

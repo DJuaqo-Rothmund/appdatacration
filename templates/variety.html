@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import bbch_chip, photo, ai_line %}
+{% from "_macros.html" import bbch_chip, photo, ai_line, compare_chart %}
 {% block meta %}{% if variety.code %}<span>Código: {{ variety.code }}</span>{% endif %}<span>{{ timeline|length }} semanas registradas</span>{% endblock %}
 {% block content %}
 <h2>Parámetros biométricos y productivos</h2>
@@ -21,7 +21,7 @@
 
 <h2>Progresión fenológica</h2>
 {% if chart %}
-<div class="card" style="padding: 12px;">{{ chart|safe }}</div>
+{% if compare %}{{ compare_chart(compare, "cmp-variety") }}{% else %}<div class="card" style="padding: 12px;">{{ chart|safe }}</div>{% endif %}
 <div class="scroll-x" style="margin-top: 12px;">
 <table>
   <thead><tr>{% for m in milestones %}<th>{{ m.name }} (≥{{ m.code }})</th>{% endfor %}</tr></thead>
@@ -38,9 +38,12 @@
   <div class="tl-item">
     <div class="when">Semana {{ t.week_number }} · {{ t.week_label }}</div>
     <div class="card tl-body">
-      <div class="photos">
-        {{ photo(t.img.canopy, "Canopia") }}
-        {{ photo(t.img.detail, "Detalle") }}
+      <div style="display:flex; flex-direction:column; gap:8px; min-width:0;">
+        <div class="photos">
+          {{ photo(t.img.canopy, "Canopia") }}
+          {{ photo(t.img.detail, "Detalle") }}
+        </div>
+        {% if t.extras %}<div class="extras">{% for src in t.extras %}<img src="{{ src }}" alt="Foto adicional" loading="lazy">{% endfor %}</div>{% endif %}
       </div>
       <div style="display:flex; flex-direction:column; gap:8px;">
         <div>{{ bbch_chip(t.code) }}</div>

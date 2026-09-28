@@ -28,7 +28,7 @@ from typing import Any, Iterable
 
 import phenology as ph
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DEFAULT_VARIETIES: list[tuple[str, str]] = [
     ("Código 11", "C11"),
@@ -123,7 +123,33 @@ CREATE TABLE IF NOT EXISTS photos (
     path            TEXT NOT NULL,
     source          TEXT DEFAULT 'camera',
     captured_at     TEXT NOT NULL,
-    UNIQUE (observation_id, kind)
+    is_primary      INTEGER NOT NULL DEFAULT 0   -- foto que aparece en los informes
+);
+
+CREATE TABLE IF NOT EXISTS drive_queue (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id     INTEGER REFERENCES photos(id) ON DELETE SET NULL,
+    path         TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',   -- pending | done | error
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    drive_id     TEXT,
+    error        TEXT DEFAULT '',
+    created_at   TEXT NOT NULL,
+    uploaded_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS challenges (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    day         TEXT NOT NULL,
+    idx         INTEGER NOT NULL,
+    kind        TEXT NOT NULL,          -- capture | identify
+    payload     TEXT NOT NULL,          -- JSON
+    status      TEXT NOT NULL DEFAULT 'open',   -- open | done | skipped
+    answer      TEXT DEFAULT '',
+    correct     INTEGER,
+    created_at  TEXT NOT NULL,
+    UNIQUE (day, idx)
 );
 
 CREATE TABLE IF NOT EXISTS bbch_stages (
@@ -171,6 +197,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_obs_week ON observations(week_id);
 CREATE INDEX IF NOT EXISTS idx_obs_variety ON observations(variety_id);
 CREATE INDEX IF NOT EXISTS idx_ref_code ON ai_references(bbch_code);
+CREATE INDEX IF NOT EXISTS idx_photos_obs ON photos(observation_id, kind);
+CREATE INDEX IF NOT EXISTS idx_drive_status ON drive_queue(status);
 """
 
 
@@ -218,11 +246,45 @@ class Database:
 
     def init_schema(self) -> None:
         with self._lock:
+            self._migrate_photos_v2()
             self.conn.executescript(SCHEMA)
             self.conn.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),))
             self.conn.commit()
+
+    def _migrate_photos_v2(self) -> None:
+        """
+        v1 -> v2: la tabla photos permitía una sola foto por tipo (UNIQUE). Se
+        recrea sin esa restricción y con «is_primary», conservando ids (las
+        referencias de la IA siguen apuntando a la misma foto).
+        """
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='photos'").fetchone()
+        if not row or "is_primary" in row[0]:
+            return
+        c = self.conn
+        c.execute("PRAGMA foreign_keys = OFF")
+        try:
+            c.executescript("""
+                BEGIN;
+                CREATE TABLE photos_v2 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK (kind IN ('canopy', 'detail')),
+                    path TEXT NOT NULL,
+                    source TEXT DEFAULT 'camera',
+                    captured_at TEXT NOT NULL,
+                    is_primary INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO photos_v2(id, observation_id, kind, path, source, captured_at, is_primary)
+                    SELECT id, observation_id, kind, path, source, captured_at, 1 FROM photos;
+                DROP TABLE photos;
+                ALTER TABLE photos_v2 RENAME TO photos;
+                UPDATE meta SET value='2' WHERE key='schema_version';
+                COMMIT;
+            """)
+        finally:
+            c.execute("PRAGMA foreign_keys = ON")
 
     def seed_defaults(self) -> None:
         """Carga variedades y escala BBCH iniciales (solo la primera vez)."""
@@ -483,29 +545,59 @@ class Database:
         return row["n"]
 
     # ----------------------------------------------------------------- photos
+    def add_photo(self, observation_id: int, kind: str, path: str, source: str = "camera",
+                  captured_at: str | None = None, primary: bool | None = None) -> int:
+        """Agrega una foto; la primera de cada tipo queda como principal."""
+        with self._lock:
+            has_primary = self.query_one(
+                "SELECT 1 FROM photos WHERE observation_id=? AND kind=? AND is_primary=1",
+                (observation_id, kind))
+            make_primary = (not has_primary) if primary is None else primary
+            cur = self.execute(
+                "INSERT INTO photos(observation_id, kind, path, source, captured_at, is_primary) "
+                "VALUES (?,?,?,?,?,0)", (observation_id, kind, path, source, captured_at or _now()))
+            if make_primary:
+                self.set_primary(cur.lastrowid)
+        self.log("add", "photo", cur.lastrowid, f"{kind} <- {os.path.basename(path)} ({source})")
+        return cur.lastrowid
+
     def set_photo(self, observation_id: int, kind: str, path: str,
                   source: str = "camera", captured_at: str | None = None) -> int:
-        old = self.query_one("SELECT * FROM photos WHERE observation_id=? AND kind=?",
-                             (observation_id, kind))
-        self.execute(
-            "INSERT INTO photos(observation_id, kind, path, source, captured_at) "
-            "VALUES (?,?,?,?,?) ON CONFLICT(observation_id, kind) DO UPDATE SET "
-            "path=excluded.path, source=excluded.source, captured_at=excluded.captured_at",
-            (observation_id, kind, path, source, captured_at or _now()))
-        row = self.query_one("SELECT id FROM photos WHERE observation_id=? AND kind=?",
-                             (observation_id, kind))
-        detail = f"{kind} <- {os.path.basename(path)} ({source})"
-        if old and old["path"] != path:
-            detail += f"; reemplaza {os.path.basename(old['path'])}"
-        self.log("set", "photo", row["id"], detail)
-        return row["id"]
+        """Agrega la foto y la deja como principal (compatibilidad con v1)."""
+        return self.add_photo(observation_id, kind, path, source, captured_at, primary=True)
+
+    def set_primary(self, photo_id: int) -> None:
+        p = self.query_one("SELECT observation_id, kind FROM photos WHERE id=?", (photo_id,))
+        if not p:
+            return
+        with self._lock:
+            self.conn.execute("UPDATE photos SET is_primary=0 WHERE observation_id=? AND kind=?",
+                              (p["observation_id"], p["kind"]))
+            self.conn.execute("UPDATE photos SET is_primary=1 WHERE id=?", (photo_id,))
+            self.conn.commit()
 
     def get_photos(self, observation_id: int) -> dict[str, dict]:
+        """Foto PRINCIPAL de cada tipo: {'canopy': fila, 'detail': fila}."""
         return {r["kind"]: r for r in self.query(
-            "SELECT * FROM photos WHERE observation_id=?", (observation_id,))}
+            "SELECT * FROM photos WHERE observation_id=? AND is_primary=1", (observation_id,))}
+
+    def list_photos(self, observation_id: int, kind: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM photos WHERE observation_id=?"
+        params: tuple = (observation_id,)
+        if kind:
+            sql += " AND kind=?"
+            params += (kind,)
+        return self.query(sql + " ORDER BY is_primary DESC, captured_at, id", params)
 
     def delete_photo(self, photo_id: int) -> None:
+        p = self.query_one("SELECT * FROM photos WHERE id=?", (photo_id,))
         self.execute("DELETE FROM photos WHERE id=?", (photo_id,))
+        if p and p["is_primary"]:  # promover la siguiente como principal
+            nxt = self.query_one("SELECT id FROM photos WHERE observation_id=? AND kind=? "
+                                 "ORDER BY captured_at DESC, id DESC LIMIT 1",
+                                 (p["observation_id"], p["kind"]))
+            if nxt:
+                self.set_primary(nxt["id"])
         self.log("delete", "photo", photo_id)
 
     def list_detail_photos(self, season: int | None = None) -> list[dict]:

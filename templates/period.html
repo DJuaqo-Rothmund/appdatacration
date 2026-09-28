@@ -1,10 +1,15 @@
 {% extends "base.html" %}
-{% from "_macros.html" import bbch_chip, heatmap %}
+{% from "_macros.html" import bbch_chip, heatmap, compare_chart %}
 {% block meta %}<span>{{ weeks|length }} semanas</span><span>{{ strips|length }} variedades</span>{% endblock %}
 {% block content %}
 <h2>Avance fenológico por semana</h2>
 <p class="lead">Código BBCH registrado para cada variedad y semana de muestreo. El tono se oscurece a medida que avanza el ciclo (yema → hoja → flor → fruto → maduración).</p>
 {{ heatmap(heat, weeks) }}
+
+{% if compare %}
+<h2>Estado BBCH por semana</h2>
+{{ compare_chart(compare, "cmp-period") }}
+{% endif %}
 
 <h2>Evolución por variedad</h2>
 <p class="lead">Secuencia de fotos de detalle por semana. Desplace horizontalmente en el teléfono.</p>

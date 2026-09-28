@@ -33,6 +33,7 @@
       {{ photo(c.img.canopy, "Canopia") }}
       {{ photo(c.img.detail, "Detalle") }}
     </div>
+    {% if c.extras %}<div class="extras">{% for src in c.extras %}<img src="{{ src }}" alt="Foto adicional" loading="lazy">{% endfor %}</div>{% endif %}
     <div>{{ bbch_chip(c.code) }}</div>
     {{ ai_line(c) }}
     {% if c.notes %}<div class="notes">{{ c.notes }}</div>{% endif %}

@@ -30,6 +30,20 @@ GLASS_EDGE = "#FFFFFFE6"  # borde luminoso del vidrio
 LINE = "#1E4A3A2E"        # líneas finas verdes translúcidas
 CLEAR = "#00000000"
 
+# --- «Mente del sistema» (módulo de IA): negros/azules con grises -------------
+MIND_BG = resource_path("assets", "ui", "mind_bg.jpg")
+MIND_CARD = "#0F1A2CC7"      # vidrio oscuro
+MIND_CARD_2 = "#16233ACC"
+MIND_EDGE = "#4FC3F740"      # borde cian tenue
+MIND_TEXT = "#DCE6F2"
+MIND_MUTED = "#8C9BB3"
+MIND_ACCENT = "#4FC3F7"      # cian
+MIND_ACCENT_2 = "#7C8CFF"    # índigo
+MIND_INK = "#06121F"         # texto sobre botones cian
+MIND_OK = "#34D399"
+MIND_BAD = "#F87171"
+MIND_FIRE = "#FFB454"
+
 BACKGROUND = resource_path("assets", "ui", "background.jpg")
 LOGO = resource_path("assets", "ui", "logo.png")
 

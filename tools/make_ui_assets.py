@@ -180,6 +180,42 @@ def make_background(w=720, h=1280):
     base.save(os.path.join(OUT, "background.jpg"), quality=90)
 
 
+# ---------------------------------------------------------------- «mente del sistema»
+def make_mind_background(w=720, h=1280):
+    """Fondo del módulo de IA: azul noche, resplandores y una red neuronal tenue."""
+    import random
+    base = Image.new("RGB", (w, h))
+    top, bottom = (7, 11, 20), (13, 22, 38)
+    for y in range(h):
+        t = y / (h - 1)
+        base.paste(tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)), (0, y, w, y + 1))
+    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    g = ImageDraw.Draw(glow)
+    for (cx, cy, r, col) in ((0.95, 0.10, 0.55, (30, 136, 229, 70)),
+                             (0.05, 0.75, 0.50, (91, 95, 239, 60)),
+                             (0.60, 0.45, 0.35, (79, 195, 247, 28))):
+        g.ellipse([(cx - r) * w, cy * h - r * w, (cx + r) * w, cy * h + r * w], fill=col)
+    glow = glow.filter(ImageFilter.GaussianBlur(120))
+    img = Image.alpha_composite(base.convert("RGBA"), glow)
+    net = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(net)
+    rnd = random.Random(7)
+    nodes = [(rnd.uniform(0, w), rnd.uniform(0, h)) for _ in range(70)]
+    for i, (x1, y1) in enumerate(nodes):
+        for x2, y2 in nodes[i + 1:]:
+            dist = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** .5
+            if dist < 150:
+                d.line([(x1, y1), (x2, y2)], fill=(120, 190, 255, int(38 * (1 - dist / 150))), width=1)
+    for x, y in nodes:
+        r = rnd.uniform(1.2, 2.8)
+        d.ellipse([x - r, y - r, x + r, y + r], fill=(140, 210, 255, 90))
+    for gx in range(0, w, 36):
+        for gy in range(0, h, 36):
+            d.point((gx, gy), fill=(140, 170, 220, 22))
+    img = Image.alpha_composite(img, net)
+    img.convert("RGB").save(os.path.join(OUT, "mind_bg.jpg"), quality=88)
+
+
 # ---------------------------------------------------------------- logo / icono
 LOGO_SRC = os.path.join(ROOT, "assets", "logo_source.png")
 APP_TITLE = "PhenoRubus"
@@ -234,6 +270,7 @@ if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     make_icons()
     make_background()
+    make_mind_background()
     make_logo_assets()
     make_presplash()
     print("Recursos generados en", OUT)

@@ -514,29 +514,46 @@ class PhenologyClassifier:
         return p / p.sum(), {"matches": int(scores.max())}
 
     # ------------------------------------------------------------ inferencia
-    def suggest(self, image_path: str, week_number: int | None = None,
-                previous: tuple[int, int] | None = None, notes: str = "") -> Suggestion:
-        t0 = time.time()
-        catalog = self.catalog()
-        codes = np.array([r["code"] for r in catalog], dtype=np.float64)
+    def _image_evidence(self, image_path: str, codes: np.ndarray):
+        """log-evidencia visual (k-NN + color) de una imagen."""
         img = load_image(image_path, self.extractor.input_size)
         q = self.extractor.extract(img)
         prof = color_profile(img)
-
-        comps: dict = {}
         logp = np.zeros(len(codes))
+        comps: dict = {}
         p_knn, knn_info = self._knn(q, codes)
         n_refs = knn_info.get("n_refs", 0)
         if p_knn is not None:
             w_knn = 1.2 if n_refs >= 10 else (0.8 if n_refs >= 4 else 0.4)
             logp += w_knn * np.log(p_knn)
             comps["knn"] = knn_info | {"weight": w_knn}
-        p_t, t_info = self._temporal(codes, week_number, previous)
-        logp += 0.8 * np.log(p_t)
-        comps["temporal"] = t_info
         p_c, c_info = self._color(codes, prof)
         logp += (0.5 if n_refs >= 10 else 0.8) * np.log(p_c)
         comps["color"] = c_info
+        return logp, comps, prof
+
+    def suggest(self, image_path, week_number: int | None = None,
+                previous: tuple[int, int] | None = None, notes: str = "") -> Suggestion:
+        """
+        `image_path` puede ser una ruta o una lista de rutas: con varias fotos de
+        detalle del mismo registro, la evidencia visual se PROMEDIA (más robusta
+        que una sola toma) y los priors temporal/textual se aplican una vez.
+        """
+        t0 = time.time()
+        paths = [image_path] if isinstance(image_path, str) else list(image_path)
+        catalog = self.catalog()
+        codes = np.array([r["code"] for r in catalog], dtype=np.float64)
+
+        evid = [self._image_evidence(pth, codes) for pth in paths]
+        logp = np.mean([e[0] for e in evid], axis=0)
+        comps, prof = dict(evid[0][1]), evid[0][2]
+        if len(paths) > 1:
+            comps["fotos"] = len(paths)
+            prof = {k: float(np.mean([e[2][k] for e in evid])) for k in prof}
+            comps["color"] = {k: round(v, 3) for k, v in prof.items()}
+        p_t, t_info = self._temporal(codes, week_number, previous)
+        logp = logp + 0.8 * np.log(p_t)
+        comps["temporal"] = t_info
         p_x, x_info = self._text(codes, notes, catalog)
         if p_x is not None:
             logp += 0.6 * np.log(p_x)
@@ -553,6 +570,14 @@ class PhenologyClassifier:
         return Suggestion(code=best, label=self.label(best),
                           confidence=round(0.5 * top[0][1] + 0.5 * macro_conf, 3),
                           top=top, explanation=self._explain(comps, prof), components=comps)
+
+    def probabilities(self, image_path: str) -> dict[int, float]:
+        """Distribución visual (sin priors) para una foto: usada en el desafío diario."""
+        codes = np.array([r["code"] for r in self.catalog()], dtype=np.float64)
+        logp, _c, _p = self._image_evidence(image_path, codes)
+        p = np.exp(logp - logp.max())
+        p /= p.sum()
+        return {int(c): float(v) for c, v in zip(codes, p)}
 
     @staticmethod
     def _explain(comps: dict, prof: dict) -> str:
@@ -575,6 +600,8 @@ class PhenologyClassifier:
         parts.append("color: " + ", ".join(f"{names[c]} {v:.0%}" for c, v in dom))
         if "notas" in comps:
             parts.append("notas coinciden con claves del estadio")
+        if comps.get("fotos"):
+            parts.append(f"promedio de {comps['fotos']} fotos")
         return " · ".join(parts)
 
     # ------------------------------------------------------------ evaluación

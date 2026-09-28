@@ -51,6 +51,49 @@
             size: self.size
             radius: self.radius
 
+<PickRow>:
+    orientation: "horizontal"
+    size_hint_y: None
+    height: dp(58)
+    padding: dp(12), dp(6)
+    spacing: dp(12)
+    radius: [dp(14)]
+    md_bg_color: 1, 1, 1, .7
+    line_color: c(theme.LINE)
+    Widget:
+        size_hint: None, None
+        size: dp(12), dp(12)
+        pos_hint: {"center_y": .5}
+        canvas:
+            Color:
+                rgba: root.accent
+            Ellipse:
+                pos: self.pos
+                size: self.size
+            Color:
+                rgba: c(theme.LEAF_DARK, .35)
+            Line:
+                circle: (self.center_x, self.center_y, self.width / 2)
+                width: dp(1)
+    MDBoxLayout:
+        orientation: "vertical"
+        pos_hint: {"center_y": .5}
+        adaptive_height: True
+        MDLabel:
+            text: root.title
+            font_style: "Body2"
+            bold: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.INK)
+        MDLabel:
+            text: root.subtitle
+            font_style: "Caption"
+            adaptive_height: True
+            opacity: 1 if root.subtitle else 0
+            theme_text_color: "Custom"
+            text_color: c(theme.MUTED)
+
 <PaperCard@GlassCard>:
     orientation: "vertical"
     padding: dp(16)
@@ -135,7 +178,7 @@
                     rounded_rectangle: (self.x, self.y, self.width, self.height, dp(16))
                     width: dp(1.2)
             Image:
-                source: theme.nav_icon(root.name, root.active)
+                source: theme.nav_icon(root.name, root.active) if root.name else ""
                 size_hint: None, None
                 size: dp(36), dp(36)
                 mipmap: True
@@ -218,7 +261,7 @@
         TopBar:
             id: bar
             title: "Muestreo semanal"
-            right_action_items: [["brain", lambda x: app.open_ai_lab(), "Entrenador de IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
+            right_action_items: [["creation", lambda x: app.open_ai_lab(), "Entrenador de IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
         ScreenManager:
             id: tabs
             transition: NoTransition()
@@ -484,6 +527,21 @@
             padding: dp(16), dp(14), dp(16), dp(24)
             spacing: dp(12)
             PaperCard:
+                MDBoxLayout:
+                    adaptive_height: True
+                    spacing: dp(6)
+                    MDCheckbox:
+                        id: all_photos
+                        size_hint: None, None
+                        size: dp(40), dp(40)
+                        pos_hint: {"center_y": .5}
+                        selected_color: c(theme.BERRY)
+                        unselected_color: c(theme.LEAF_DARK, .5)
+                        on_active: root.set_all_photos(self.active)
+                    Body:
+                        text: "Incluir todas las fotos (no solo la principal)"
+                        pos_hint: {"center_y": .5}
+            PaperCard:
                 SectionLabel:
                     text: "1 · REPORTE SEMANAL INTER-VARIETAL"
                 Muted:
@@ -733,6 +791,79 @@
         size_hint_y: None
         height: dp(18)
 
+<ProgressRing>:
+    canvas:
+        Color:
+            rgba: self.track
+        Line:
+            circle: (self.center_x, self.center_y, min(self.width, self.height) / 2 - self.thickness / 2)
+            width: self.thickness / 2
+        Color:
+            rgba: self.color
+        Line:
+            circle: (self.center_x, self.center_y, min(self.width, self.height) / 2 - self.thickness / 2, 0, max(0.1, 360 * self.value))
+            width: self.thickness / 2
+            cap: "round"
+
+<MetricTile@GlassCard>:
+    orientation: "vertical"
+    padding: dp(6), dp(8)
+    radius: [dp(16)]
+    md_bg_color: 1, 1, 1, .6
+    icon: "circle"
+    caption: ""
+    text: "—"
+    MDIcon:
+        icon: root.icon
+        font_size: "20sp"
+        size_hint: None, None
+        size: dp(24), dp(24)
+        pos_hint: {"center_x": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF)
+    MDLabel:
+        text: root.text
+        halign: "center"
+        font_style: "Subtitle1"
+        bold: True
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF_DARK)
+    MDLabel:
+        text: root.caption
+        halign: "center"
+        font_style: "Caption"
+        theme_text_color: "Custom"
+        text_color: c(theme.MUTED)
+
+<LegendDot@BoxLayout>:
+    size_hint: None, None
+    size: self.minimum_width, dp(16)
+    spacing: dp(4)
+    color: 1, 1, 1, 1
+    text: ""
+    Widget:
+        size_hint: None, None
+        size: dp(10), dp(10)
+        pos_hint: {"center_y": .5}
+        canvas:
+            Color:
+                rgba: root.color
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(3)]
+            Color:
+                rgba: c(theme.LINE)
+            Line:
+                rounded_rectangle: (self.x, self.y, self.width, self.height, dp(3))
+    MDLabel:
+        text: root.text
+        font_style: "Caption"
+        adaptive_size: True
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.MUTED)
+
 <PreviewTab>:
     md_bg_color: 0, 0, 0, 0
     MDScrollView:
@@ -780,41 +911,88 @@
                     adaptive_height: True
                     theme_text_color: "Custom"
                     text_color: c(theme.LEAF_DARK)
-                MDGridLayout:
-                    cols: 3
-                    spacing: dp(8)
-                    adaptive_height: True
-                    StatTile:
-                        id: stat_scope
-                        label: "variedades × semanas"
-                    StatTile:
-                        id: stat_photos
-                        label: "fotos"
-                    StatTile:
-                        id: stat_bbch
-                        label: "estados BBCH"
-                        accent: c(theme.BERRY)
-                MDProgressBar:
-                    id: completeness
-                    max: 1
-                    value: 0
-                    color: c(theme.BERRY)
-                    back_color: c(theme.BERRY_SOFT)
+                MDBoxLayout:
                     size_hint_y: None
-                    height: dp(6)
-                Muted:
-                    id: completeness_text
-                Muted:
-                    id: missing_text
-                Muted:
-                    id: size_text
+                    height: dp(96)
+                    spacing: dp(14)
+                    FloatLayout:
+                        size_hint_x: None
+                        width: dp(92)
+                        ProgressRing:
+                            id: ring
+                            size_hint: None, None
+                            size: dp(88), dp(88)
+                            pos_hint: {"center_x": .5, "center_y": .5}
+                        MDLabel:
+                            id: ring_text
+                            text: "0%"
+                            halign: "center"
+                            font_style: "H6"
+                            bold: True
+                            theme_text_color: "Custom"
+                            text_color: c(theme.BERRY)
+                            pos_hint: {"center_x": .5, "center_y": .5}
+                    MDGridLayout:
+                        cols: 3
+                        spacing: dp(6)
+                        MetricTile:
+                            id: metric_photos
+                            icon: "camera-outline"
+                            caption: "fotos"
+                        MetricTile:
+                            id: metric_bbch
+                            icon: "sprout-outline"
+                            caption: "estados"
+                        MetricTile:
+                            id: metric_notes
+                            icon: "note-text-outline"
+                            caption: "notas"
+                CompletenessGrid:
+                    id: grid
+                    size_hint_y: None
+                    height: dp(40)
+                MDBoxLayout:
+                    adaptive_height: True
+                    spacing: dp(12)
+                    LegendDot:
+                        color: c(theme.LEAF)
+                        text: "completo"
+                    LegendDot:
+                        color: c(theme.BERRY_LIGHT)
+                        text: "parcial"
+                    LegendDot:
+                        color: 1, 1, 1, .8
+                        text: "vacío"
+                    Widget:
+                MDBoxLayout:
+                    adaptive_height: True
+                    MDLabel:
+                        id: lack_text
+                        font_style: "Body2"
+                        bold: True
+                        adaptive_height: True
+                        theme_text_color: "Custom"
+                        text_color: c(theme.BERRY)
+                    MDIcon:
+                        icon: "email-fast-outline"
+                        font_size: "16sp"
+                        size_hint: None, None
+                        size: dp(20), dp(20)
+                        pos_hint: {"center_y": .5}
+                        theme_text_color: "Custom"
+                        text_color: c(theme.MUTED)
+                    Muted:
+                        id: size_text
+                        size_hint_x: None
+                        width: dp(64)
+                        pos_hint: {"center_y": .5}
             PrimaryButton:
                 id: preview_btn
                 text: "Ver vista previa completa"
                 on_release: root.open_preview()
             Muted:
                 halign: "center"
-                text: "La vista previa se muestra solo en este teléfono: no se envía ni se copia a Descargas."
+                text: "Solo en este teléfono · no se envía"
 
 # ---------------------------------------------------------------------------
 # Registro fenológico
@@ -823,30 +1001,49 @@
     orientation: "vertical"
     padding: dp(10)
     spacing: dp(6)
-    radius: [dp(12)]
-    elevation: 0
+    radius: [dp(16)]
     size_hint_y: None
-    height: dp(250)
+    height: dp(318)
     md_bg_color: c(theme.GLASS)
     line_color: c(theme.GLASS_EDGE)
-    SectionLabel:
-        text: root.caption
-        shorten: True
+    MDBoxLayout:
+        adaptive_height: True
+        SectionLabel:
+            text: root.caption
+            shorten: True
+            pos_hint: {"center_y": .5}
+        Tag:
+            text: f"{root.count} FOTO" + ("S" if root.count != 1 else "")
+            opacity: 1 if root.count else 0
+            bg: c(theme.BERRY_SOFT)
+            fg: c(theme.BERRY)
+            pos_hint: {"center_y": .5}
     MDBoxLayout:
         id: image_box
+    ScrollView:
+        size_hint_y: None
+        height: dp(46) if root.count > 1 else 0
+        opacity: 1 if root.count > 1 else 0
+        do_scroll_y: False
+        bar_width: 0
+        BoxLayout:
+            id: strip
+            size_hint_x: None
+            width: self.minimum_width
+            spacing: dp(6)
     Muted:
         text: root.meta
         shorten: True
     MDBoxLayout:
         adaptive_height: True
-        spacing: dp(4)
+        spacing: dp(2)
         MDIconButton:
-            icon: "camera-outline"
+            icon: "camera-plus-outline"
             theme_icon_color: "Custom"
-            icon_color: c(theme.LEAF_DARK)
+            icon_color: c(theme.BERRY)
             on_release: root.screen.capture(root.kind, "camera")
         MDIconButton:
-            icon: "image-outline"
+            icon: "image-multiple-outline"
             theme_icon_color: "Custom"
             icon_color: c(theme.LEAF_DARK)
             on_release: root.screen.capture(root.kind, "gallery")
@@ -857,6 +1054,14 @@
             theme_icon_color: "Custom"
             icon_color: c(theme.BERRY)
             on_release: root.screen.remove_photo(root.kind)
+
+<StripThumb>:
+    size_hint: None, None
+    size: dp(44), dp(44)
+    padding: dp(2)
+    radius: [dp(9)]
+    md_bg_color: 1, 1, 1, .6
+    line_color: c(theme.BERRY) if self.primary else c(theme.GLASS_EDGE)
 
 <ObservationScreen>:
     md_bg_color: 0, 0, 0, 0
@@ -1164,84 +1369,281 @@
     text_color: (1, 1, 1, 1) if self.selected else c(theme.LEAF_DARK)
     line_color: c(theme.GLASS_EDGE)
 
-<AILabScreen>:
-    md_bg_color: 0, 0, 0, 0
+# ---------------------------------------------------------------------------
+# «Mente del sistema»: estilos oscuros del módulo de IA
+# ---------------------------------------------------------------------------
+<MindCard@GlassCard>:
+    orientation: "vertical"
+    padding: dp(16)
+    spacing: dp(9)
+    radius: [dp(20)]
+    adaptive_height: True
+    md_bg_color: c(theme.MIND_CARD)
+    line_color: c(theme.MIND_EDGE)
+
+<MindSection@MDLabel>:
+    font_style: "Overline"
+    bold: True
+    adaptive_height: True
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_ACCENT)
+
+<MindText@MDLabel>:
+    font_style: "Body2"
+    adaptive_height: True
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_TEXT)
+
+<MindMuted@MDLabel>:
+    font_style: "Caption"
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_MUTED)
+    size_hint_y: None
+    text_size: self.width, None
+    height: self.texture_size[1] if self.text else 0
+
+<MindButton@MDRaisedButton>:
+    md_bg_color: c(theme.MIND_ACCENT)
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_INK)
+    elevation: 0
+    rounded_button: True
+    size_hint_x: 1
+    height: dp(46)
+    font_size: "15sp"
+
+<MindGhost@MDRectangleFlatIconButton>:
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_TEXT)
+    icon_color: c(theme.MIND_ACCENT)
+    line_color: c(theme.MIND_EDGE)
+    md_bg_color: 1, 1, 1, .04
+    rounded_button: True
+    size_hint_x: 1
+
+<MindSeg>:
+    size_hint_x: 1
+    elevation: 0
+    rounded_button: True
+    font_size: "13sp"
+    md_bg_color: c(theme.MIND_ACCENT) if self.selected else (1, 1, 1, .06)
+    theme_text_color: "Custom"
+    text_color: c(theme.MIND_INK) if self.selected else c(theme.MIND_TEXT)
+    line_color: c(theme.MIND_EDGE)
+
+<MindTopBar>:
+    elevation: 0
+    md_bg_color: .02, .04, .08, .55
+
+<MindRow>:
+    orientation: "horizontal"
+    size_hint_y: None
+    height: dp(60)
+    padding: dp(12), dp(6)
+    spacing: dp(10)
+    radius: [dp(14)]
+    md_bg_color: 1, 1, 1, .05
+    line_color: c(theme.MIND_EDGE)
     MDBoxLayout:
         orientation: "vertical"
-        TopBar:
-            title: "Calibración IA"
+        adaptive_height: True
+        pos_hint: {"center_y": .5}
+        MDLabel:
+            text: root.title
+            font_style: "Body2"
+            bold: True
+            adaptive_height: True
+            shorten: True
+            theme_text_color: "Custom"
+            text_color: c(theme.MIND_TEXT)
+        MDLabel:
+            text: root.subtitle
+            font_style: "Caption"
+            adaptive_height: True
+            shorten: True
+            theme_text_color: "Custom"
+            text_color: c(theme.MIND_MUTED)
+    MDLabel:
+        text: root.value
+        font_style: "Subtitle1"
+        bold: True
+        halign: "right"
+        size_hint_x: None
+        width: dp(56)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.MIND_ACCENT)
+
+<MindOption>:
+    orientation: "vertical"
+    size_hint_y: None
+    height: dp(64)
+    padding: dp(12), dp(8)
+    radius: [dp(16)]
+    md_bg_color: (c(theme.MIND_OK, .22) if self.result == "ok" else c(theme.MIND_BAD, .22) if self.result == "bad" else (1, 1, 1, .06))
+    line_color: (c(theme.MIND_OK) if self.result == "ok" else c(theme.MIND_BAD) if self.result == "bad" else c(theme.MIND_EDGE))
+    MDLabel:
+        text: root.title
+        font_style: "Subtitle1"
+        bold: True
+        adaptive_height: True
+        theme_text_color: "Custom"
+        text_color: c(theme.MIND_TEXT)
+    MDLabel:
+        text: root.subtitle
+        font_style: "Caption"
+        adaptive_height: True
+        shorten: True
+        theme_text_color: "Custom"
+        text_color: c(theme.MIND_MUTED)
+
+<AILabScreen>:
+    md_bg_color: 0, 0, 0, 0
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 1
+        Rectangle:
+            source: theme.MIND_BG
+            pos: self.pos
+            size: self.size
+    MDBoxLayout:
+        orientation: "vertical"
+        MindTopBar:
+            title: "Entrenador de IA"
             left_action_items: [["arrow-left", lambda x: app.back()]]
-            right_action_items: [["lock-outline", lambda x: app.back()]]
+            right_action_items: [["lock-outline", lambda x: app.back(), "Salir"]]
         MDBoxLayout:
             adaptive_height: True
-            padding: dp(16), dp(12), dp(16), dp(4)
+            padding: dp(14), dp(10), dp(14), dp(4)
             spacing: dp(6)
-            SegButton:
-                text: "Documentos"
-                selected: seg.current == "docs"
-                on_release: root.show("docs")
-            SegButton:
-                text: "Etiquetado"
+            MindSeg:
+                text: "Desafío"
+                selected: seg.current == "challenge"
+                on_release: root.show("challenge")
+            MindSeg:
+                text: "Etiquetar"
                 selected: seg.current == "label"
                 on_release: root.show("label")
-            SegButton:
+            MindSeg:
                 text: "Modelo"
                 selected: seg.current == "model"
                 on_release: root.show("model")
+            MindSeg:
+                text: "Datos"
+                selected: seg.current == "data"
+                on_release: root.show("data")
         MDScreenManager:
             id: seg
             MDScreen:
-                name: "docs"
+                name: "challenge"
+                md_bg_color: 0, 0, 0, 0
                 MDScrollView:
                     do_scroll_x: False
                     MDBoxLayout:
                         orientation: "vertical"
                         adaptive_height: True
-                        padding: dp(16), dp(8), dp(16), dp(24)
-                        spacing: dp(10)
-                        PaperCard:
-                            SectionLabel:
-                                text: "DOCUMENTOS TÉCNICOS DE REFERENCIA"
-                            Muted:
-                                text: "Cargue PDF o texto con claves fenológicas (p. ej. «BBCH 65: Plena floración...»). Las claves detectadas enriquecen la escala BBCH y el análisis de las notas de campo."
-                            PrimaryButton:
-                                text: "Cargar documento (PDF / TXT)"
-                                on_release: root.import_document()
-                            GhostButton:
-                                icon: "format-list-numbered"
-                                text: "Ver escala BBCH en uso"
-                                on_release: root.show_scale()
+                        padding: dp(14), dp(8), dp(14), dp(24)
+                        spacing: dp(12)
+                        MindCard:
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(100)
+                                spacing: dp(14)
+                                FloatLayout:
+                                    size_hint_x: None
+                                    width: dp(96)
+                                    ProgressRing:
+                                        id: ch_ring
+                                        size_hint: None, None
+                                        size: dp(92), dp(92)
+                                        color: c(theme.MIND_ACCENT)
+                                        track: 1, 1, 1, .08
+                                        pos_hint: {"center_x": .5, "center_y": .5}
+                                    MDLabel:
+                                        id: ch_ring_text
+                                        text: "0/5"
+                                        halign: "center"
+                                        font_style: "H6"
+                                        bold: True
+                                        theme_text_color: "Custom"
+                                        text_color: c(theme.MIND_TEXT)
+                                        pos_hint: {"center_x": .5, "center_y": .5}
+                                MDBoxLayout:
+                                    orientation: "vertical"
+                                    spacing: dp(4)
+                                    MindSection:
+                                        text: "DESAFÍO DIARIO"
+                                    MDLabel:
+                                        id: ch_title
+                                        text: "Entrena a la IA"
+                                        font_style: "H6"
+                                        bold: True
+                                        adaptive_height: True
+                                        theme_text_color: "Custom"
+                                        text_color: c(theme.MIND_TEXT)
+                                    MDBoxLayout:
+                                        adaptive_height: True
+                                        spacing: dp(4)
+                                        MDIcon:
+                                            icon: "fire"
+                                            font_size: "18sp"
+                                            size_hint: None, None
+                                            size: dp(20), dp(20)
+                                            theme_text_color: "Custom"
+                                            text_color: c(theme.MIND_FIRE)
+                                        MindText:
+                                            id: streak_text
+                                            size_hint_x: None
+                                            width: dp(86)
+                                        MDIcon:
+                                            icon: "star-four-points"
+                                            font_size: "16sp"
+                                            size_hint: None, None
+                                            size: dp(20), dp(20)
+                                            theme_text_color: "Custom"
+                                            text_color: c(theme.MIND_ACCENT_2)
+                                        MindText:
+                                            id: xp_text
+                                    MDProgressBar:
+                                        id: level_bar
+                                        max: 1
+                                        value: 0
+                                        color: c(theme.MIND_ACCENT_2)
+                                        back_color: 1, 1, 1, .08
+                                        size_hint_y: None
+                                        height: dp(4)
                         MDBoxLayout:
-                            id: docs
+                            id: task_box
                             orientation: "vertical"
                             adaptive_height: True
-                            spacing: dp(6)
+                            spacing: dp(10)
             MDScreen:
                 name: "label"
+                md_bg_color: 0, 0, 0, 0
                 MDScrollView:
                     do_scroll_x: False
                     MDBoxLayout:
                         orientation: "vertical"
                         adaptive_height: True
-                        padding: dp(16), dp(8), dp(16), dp(24)
+                        padding: dp(14), dp(8), dp(14), dp(24)
                         spacing: dp(10)
-                        PaperCard:
-                            SectionLabel:
+                        MindCard:
+                            MindSection:
                                 text: "ETIQUETADO DE FOTOS (FEW-SHOT)"
-                            Muted:
-                                text: "Toque una foto de detalle para asignarle su estado fenológico real y agregarla a la base de referencia del clasificador k-NN."
+                            MindMuted:
+                                text: "Toque una foto de detalle para asignarle su estado real y sumarla a la memoria de la IA."
                             MDBoxLayout:
                                 adaptive_height: True
-                                Body:
+                                MindText:
                                     text: "Aprendizaje continuo al guardar registros"
                                     pos_hint: {"center_y": .5}
                                 MDSwitch:
                                     id: auto_learn
-                                    thumb_color_active: c(theme.BERRY)
-                                    track_color_active: c(theme.BERRY_LIGHT, .6)
                                     pos_hint: {"center_y": .5}
+                                    thumb_color_active: c(theme.MIND_ACCENT)
+                                    track_color_active: c(theme.MIND_ACCENT, .4)
                                     on_active: root.set_auto_learn(self.active)
-                            GhostButton:
+                            MindGhost:
                                 icon: "playlist-plus"
                                 text: "Agregar todas las fotos ya etiquetadas"
                                 on_release: root.add_all_labeled()
@@ -1252,39 +1654,41 @@
                             spacing: dp(6)
             MDScreen:
                 name: "model"
+                md_bg_color: 0, 0, 0, 0
                 MDScrollView:
                     do_scroll_x: False
                     MDBoxLayout:
                         orientation: "vertical"
                         adaptive_height: True
-                        padding: dp(16), dp(8), dp(16), dp(24)
+                        padding: dp(14), dp(8), dp(14), dp(24)
                         spacing: dp(10)
-                        PaperCard:
-                            SectionLabel:
+                        MindCard:
+                            MindSection:
                                 text: "CLASIFICADOR LOCAL"
-                            Body:
+                            MindText:
                                 id: model_text
-                            Muted:
+                            MindMuted:
                                 id: eval_text
                             MDProgressBar:
                                 id: train_progress
                                 max: 1
                                 value: 0
-                                color: c(theme.LEAF_DARK)
+                                color: c(theme.MIND_ACCENT)
+                                back_color: 1, 1, 1, .08
                                 size_hint_y: None
                                 height: dp(4)
-                            PrimaryButton:
+                            MindButton:
                                 text: "Evaluar (validación cruzada)"
                                 on_release: root.evaluate()
-                            GhostButton:
+                            MindGhost:
                                 icon: "cog-refresh-outline"
                                 text: "Re-entrenar (recalcular embeddings)"
                                 on_release: root.retrain()
-                        PaperCard:
-                            SectionLabel:
+                        MindCard:
+                            MindSection:
                                 text: "PROBAR CON UNA FOTO"
-                            Muted:
-                                text: "Analiza una imagen de la galería sin guardarla en ningún registro."
+                            MindMuted:
+                                text: "Analiza una imagen de la galería sin guardarla."
                             MDBoxLayout:
                                 id: try_box
                                 size_hint_y: None
@@ -1299,7 +1703,7 @@
                                     size: dp(22), dp(22)
                                     active: False
                                     opacity: 1 if self.active else 0
-                                    color: c(theme.BERRY)
+                                    color: c(theme.MIND_ACCENT)
                                     pos_hint: {"center_y": .5}
                                 MDLabel:
                                     id: try_label
@@ -1308,48 +1712,109 @@
                                     bold: True
                                     adaptive_height: True
                                     theme_text_color: "Custom"
-                                    text_color: c(theme.INK)
+                                    text_color: c(theme.MIND_TEXT)
                             MDProgressBar:
                                 id: try_conf
                                 max: 1
                                 value: 0
-                                color: c(theme.BERRY)
-                                back_color: c(theme.BERRY_SOFT)
+                                color: c(theme.MIND_ACCENT)
+                                back_color: 1, 1, 1, .08
                                 size_hint_y: None
                                 height: dp(6)
-                            Muted:
+                            MindMuted:
                                 id: try_explain
-                            GhostButton:
+                            MindGhost:
                                 icon: "image-search-outline"
                                 text: "Elegir foto y analizar"
                                 on_release: root.try_photo()
-                        PaperCard:
-                            SectionLabel:
-                                text: "REFERENCIAS POR ESTADO BBCH"
+                        MindCard:
+                            MindSection:
+                                text: "MEMORIA POR ESTADO BBCH"
                             MDBoxLayout:
                                 id: counts
                                 orientation: "vertical"
                                 adaptive_height: True
-                                spacing: dp(2)
-                        PaperCard:
-                            SectionLabel:
+                                spacing: dp(4)
+                        MindCard:
+                            MindSection:
                                 text: "SEGURIDAD"
-                            GhostButton:
+                            MindGhost:
                                 icon: "form-textbox-password"
                                 text: "Cambiar PIN"
                                 on_release: root.change_pin()
+            MDScreen:
+                name: "data"
+                md_bg_color: 0, 0, 0, 0
+                MDScrollView:
+                    do_scroll_x: False
+                    MDBoxLayout:
+                        orientation: "vertical"
+                        adaptive_height: True
+                        padding: dp(14), dp(8), dp(14), dp(24)
+                        spacing: dp(10)
+                        MindCard:
+                            MindSection:
+                                text: "BASE DE DATOS DE TEMPORADAS ANTERIORES"
+                            MindText:
+                                text: "Importe registros y fotos de años anteriores para enriquecer la memoria de la IA y los informes."
+                            MindMuted:
+                                text: "Formato: CSV (o ZIP con el CSV y las fotos). Columnas: temporada, fecha o semana, variedad, bbch, foto_canopia, foto_detalle, notas, rendimiento_historico, unidad_rendimiento, canas_basales, laterales."
+                            MDBoxLayout:
+                                adaptive_height: True
+                                MindText:
+                                    text: "Entrenar la IA con las fotos etiquetadas"
+                                    pos_hint: {"center_y": .5}
+                                MDSwitch:
+                                    id: train_import
+                                    active: True
+                                    pos_hint: {"center_y": .5}
+                                    thumb_color_active: c(theme.MIND_ACCENT)
+                                    track_color_active: c(theme.MIND_ACCENT, .4)
+                            MindButton:
+                                id: import_btn
+                                text: "Importar CSV o ZIP"
+                                on_release: root.import_history()
+                            MindGhost:
+                                icon: "file-delimited-outline"
+                                text: "Guardar plantilla CSV"
+                                on_release: root.save_template()
+                            MDProgressBar:
+                                id: import_progress
+                                max: 1
+                                value: 0
+                                color: c(theme.MIND_ACCENT)
+                                back_color: 1, 1, 1, .08
+                                size_hint_y: None
+                                height: dp(4)
+                            MindMuted:
+                                id: import_text
+                        MindCard:
+                            MindSection:
+                                text: "DOCUMENTOS TÉCNICOS"
+                            MindMuted:
+                                text: "PDF o texto con claves fenológicas (p. ej. «BBCH 65: Plena floración…»)."
+                            MindButton:
+                                text: "Cargar documento (PDF / TXT)"
+                                on_release: root.import_document()
+                            MindGhost:
+                                icon: "format-list-numbered"
+                                text: "Ver escala BBCH en uso"
+                                on_release: root.show_scale()
+                            MDBoxLayout:
+                                id: docs
+                                orientation: "vertical"
+                                adaptive_height: True
+                                spacing: dp(6)
 
 <LabelPhotoRow>:
     orientation: "horizontal"
     padding: dp(8)
     spacing: dp(10)
-    radius: [dp(10)]
-    elevation: 0
+    radius: [dp(14)]
     size_hint_y: None
     height: dp(72)
-    md_bg_color: c(theme.GLASS)
-    line_color: c(theme.GLASS_EDGE)
-    ripple_behavior: True
+    md_bg_color: 1, 1, 1, .05
+    line_color: c(theme.MIND_EDGE)
     MDBoxLayout:
         id: thumb_box
         size_hint: None, None
@@ -1366,16 +1831,16 @@
             adaptive_height: True
             shorten: True
             theme_text_color: "Custom"
-            text_color: c(theme.INK)
+            text_color: c(theme.MIND_TEXT)
         MDLabel:
             text: root.subtitle
             font_style: "Caption"
             adaptive_height: True
             shorten: True
             theme_text_color: "Custom"
-            text_color: c(theme.MUTED)
+            text_color: c(theme.MIND_MUTED)
     Tag:
-        text: "EN REFERENCIA" if root.in_reference else "SIN ETIQUETA IA"
-        bg: c(theme.LEAF_SOFT) if root.in_reference else c(theme.BERRY_SOFT)
-        fg: c(theme.LEAF_DARK) if root.in_reference else c(theme.LEAF_DARK)
+        text: "EN MEMORIA" if root.in_reference else "NUEVA"
+        bg: c(theme.MIND_ACCENT, .18) if root.in_reference else c(theme.MIND_ACCENT_2, .22)
+        fg: c(theme.MIND_ACCENT) if root.in_reference else c(theme.MIND_TEXT)
         pos_hint: {"center_y": .5}

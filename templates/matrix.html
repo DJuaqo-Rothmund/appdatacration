@@ -1,10 +1,15 @@
 {% extends "base.html" %}
-{% from "_macros.html" import bbch_chip, heatmap %}
+{% from "_macros.html" import bbch_chip, heatmap, compare_chart %}
 {% block meta %}<span>{{ rows|length }} variedades</span><span>{{ weeks|length }} semanas</span>{% endblock %}
 {% block content %}
 <h2>Matriz fenológica</h2>
 <p class="lead">Estado BBCH por variedad (filas) y semana de muestreo (columnas).</p>
 {{ heatmap(heat, weeks) }}
+
+{% if compare %}
+<h2>Estado BBCH por semana</h2>
+{{ compare_chart(compare, "cmp-matrix") }}
+{% endif %}
 
 <h2>Precocidad relativa</h2>
 <p class="lead">Diferencia media, en unidades BBCH, entre cada variedad y el promedio de todas las variedades en las mismas semanas. Valores positivos = adelantada; negativos = tardía.</p>

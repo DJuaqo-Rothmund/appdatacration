@@ -67,6 +67,8 @@ p.lead { color: var(--ink-2); margin: 0 0 14px; max-width: 72ch; }
 figure { margin: 0; }
 figure img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; display: block; background: var(--chip); }
 figure figcaption { font-size: 11px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: .06em; }
+.extras { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.extras img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; flex: none; }
 .nophoto { aspect-ratio: 4 / 3; border: 1px dashed var(--rule); border-radius: 6px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 .chip { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px 3px 6px; border-radius: 999px; background: var(--chip); font-size: 13px; font-weight: 600; }
 .chip .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.18); flex: none; }
@@ -122,6 +124,39 @@ footer.doc { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--ru
   .card { box-shadow: none; }
   .vcard, .tl-item { break-inside: avoid; }
 }
+
+/* ---- Gráfico comparativo semana × BBCH ---- */
+:root { --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --ctx: #c9cdc0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --ctx: #4a4f42; } }
+:root[data-theme="dark"] { --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --ctx: #4a4f42; }
+.cmp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.chip-s { font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 999px; padding: 4px 11px 4px 8px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.chip-s .key { width: 14px; height: 3px; border-radius: 2px; background: var(--ctx); }
+.chip-s.on { border-color: var(--ink-2); font-weight: 600; }
+.s1 .key, .t-r.s1 .key { background: var(--c1); } .s2 .key, .t-r.s2 .key { background: var(--c2); }
+.s3 .key, .t-r.s3 .key { background: var(--c3); } .s4 .key, .t-r.s4 .key { background: var(--c4); }
+.cmp-fig { position: relative; padding: 8px; }
+svg.cmp { width: 100%; height: auto; display: block; touch-action: pan-y; }
+svg.cmp .band { fill: transparent; } svg.cmp .band.alt { fill: var(--chip); opacity: .55; }
+svg.cmp .band-l, svg.cmp .tick { fill: var(--muted); font-size: 11px; font-family: inherit; }
+svg.cmp g.series path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+svg.cmp g.off path { stroke: var(--ctx); stroke-width: 1.2; }
+svg.cmp g.off .dot, svg.cmp g.off .end { display: none; }
+svg.cmp g.on path { stroke-width: 2.4; }
+svg.cmp g.on .dot { stroke: var(--paper); stroke-width: 2; }
+svg.cmp g.on .end { fill: var(--ink); font-size: 11.5px; font-weight: 600; }
+svg.cmp g.s1 path { stroke: var(--c1); } svg.cmp g.s1 .dot { fill: var(--c1); }
+svg.cmp g.s2 path { stroke: var(--c2); } svg.cmp g.s2 .dot { fill: var(--c2); }
+svg.cmp g.s3 path { stroke: var(--c3); } svg.cmp g.s3 .dot { fill: var(--c3); }
+svg.cmp g.s4 path { stroke: var(--c4); } svg.cmp g.s4 .dot { fill: var(--c4); }
+svg.cmp .xhair { stroke: var(--muted); stroke-width: 1; opacity: 0; pointer-events: none; }
+svg.cmp .hit { fill: transparent; }
+.cmp-tip { position: absolute; top: 12px; min-width: 150px; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); pointer-events: none; }
+.cmp-tip .t-h { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.cmp-tip .t-r { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cmp-tip .t-r .key { width: 12px; height: 3px; border-radius: 2px; background: var(--ctx); }
+.cmp-tip .t-r span:last-child { color: var(--ink-2); }
+.cmp-note { margin: 6px 0 0; }
 </style>
 </head>
 <body>

@@ -189,3 +189,102 @@ def test_any_start_week_and_reset(db):
     assert w["label"] == "Semana del 24 de septiembre" and w["week_number"] == 6
     db.set_season_start(2026, ph.default_season_start(2026))
     assert db.list_weeks(2026)[0]["label"] == "Semana del 7 de septiembre"
+
+
+def test_multiple_photos_primary_average_and_report(db, tmp_path):
+    season = 2026
+    db.ensure_weeks(season, 1)
+    v, w = db.list_varieties()[0], db.list_weeks(season)[0]
+    obs = db.get_or_create_observation(v["id"], w["id"])
+    paths = [synthetic_photo(65, "detail", str(tmp_path / f"d{i}.jpg"), i) for i in range(3)]
+    ids = [db.add_photo(obs["id"], "detail", p, "gallery") for p in paths]
+    assert db.get_photos(obs["id"])["detail"]["id"] == ids[0]      # la primera es principal
+    db.set_primary(ids[2])
+    assert db.get_photos(obs["id"])["detail"]["id"] == ids[2]
+    assert [p["id"] for p in db.list_photos(obs["id"], "detail")][0] == ids[2]
+    clf = PhenologyClassifier(db, HandcraftedExtractor())
+    s = clf.suggest(paths, week_number=10)
+    assert s.components["fotos"] == 3 and s.code // 10 == 6
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    rep.include_all_photos = True
+    html = open(rep.weekly(w["id"]).path, encoding="utf-8").read()
+    assert html.count('alt="Foto adicional"') == 2
+    db.delete_photo(ids[2])
+    assert db.get_photos(obs["id"])["detail"]["id"] in ids[:2]
+
+
+def test_migrates_v1_photos_table(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "v1.sqlite3")
+    Database(path).close()
+    con = sqlite3.connect(path)
+    con.executescript("""
+        DROP TABLE photos;
+        CREATE TABLE photos (id INTEGER PRIMARY KEY AUTOINCREMENT, observation_id INTEGER NOT NULL,
+            kind TEXT NOT NULL, path TEXT NOT NULL, source TEXT DEFAULT 'camera',
+            captured_at TEXT NOT NULL, UNIQUE (observation_id, kind));
+        INSERT INTO sampling_weeks(season, week_number, start_date, label) VALUES (2026, 1, '2026-09-07', 'x');
+        INSERT INTO observations(variety_id, week_id, created_at, updated_at) VALUES (1, 1, 'x', 'x');
+        INSERT INTO photos(observation_id, kind, path, captured_at) VALUES (1, 'detail', '/a.jpg', 'x');
+    """)
+    con.commit(); con.close()
+    db = Database(path)
+    assert db.get_photos(1)["detail"]["path"] == "/a.jpg"
+    db.add_photo(1, "detail", "/b.jpg")                    # ya no hay UNIQUE
+    assert len(db.list_photos(1, "detail")) == 2
+    db.close()
+
+
+def test_daily_challenge_game(db, tmp_path):
+    from ai_game import DailyChallenge
+    clf = PhenologyClassifier(db, HandcraftedExtractor())
+    season = 2026
+    db.ensure_weeks(season, 3)
+    for i, v in enumerate(db.list_varieties()[:4]):          # fotos para «¿qué estado es?»
+        obs = db.get_or_create_observation(v["id"], db.list_weeks(season)[1]["id"])
+        db.add_photo(obs["id"], "detail", synthetic_photo(65, "detail", str(tmp_path / f"p{i}.jpg"), i))
+        if i < 2:
+            db.update_observation(obs["id"], bbch_code=65)
+    game = DailyChallenge(db, lambda: clf)
+    day = dt.date(2026, 9, 28)
+    chs = game.ensure_today(day)
+    assert len(chs) == 5 and [c["kind"] for c in chs].count("identify") == 3
+    assert game.ensure_today(day) == chs                       # determinista / idempotente
+    for ch in chs:
+        if ch["kind"] == "identify":
+            res = game.answer_identify(ch["id"], ch["payload"]["options"][0])
+            assert res["label"] in ch["payload"]["options"] + ([ch["payload"]["truth"]] if ch["payload"]["truth"] is not None else [])
+        else:
+            res = game.complete_capture(ch["id"], synthetic_photo(ch["payload"]["target"], "detail",
+                                                                  str(tmp_path / f"c{ch['id']}.jpg"), 9))
+            assert res["target"] == ch["payload"]["target"]
+    st = game.stats()
+    assert st["streak"] == 1 and st["last_day"] == "2026-09-28" and st["xp"] > 0
+    assert sum(db.reference_counts().values()) == 5
+    # Día siguiente: racha continúa; saltar todo no la suma.
+    chs2 = game.ensure_today(day + dt.timedelta(days=1))
+    for ch in chs2:
+        game.skip(ch["id"])
+    assert game.stats()["streak"] == 1
+
+
+def test_historical_import_zip(db, tmp_path):
+    import zipfile as zf_
+    from importer import import_file, write_template
+    tpl = write_template(str(tmp_path / "plantilla.csv"))
+    z = tmp_path / "historico.zip"
+    with zf_.ZipFile(z, "w") as zf:
+        zf.write(tpl, "datos/plantilla.csv")
+        for n, code in (("meeker_s07_canopia.jpg", 57), ("meeker_s07_detalle.jpg", 57),
+                        ("regina_s10_detalle.jpg", 65), ("regina_s10_detalle2.jpg", 65)):
+            zf.write(synthetic_photo(code, "detail", str(tmp_path / n), code), f"fotos/{n}")
+    clf = PhenologyClassifier(db, HandcraftedExtractor())
+    res = import_file(db, str(z), classifier=clf)
+    assert res.rows == 3 and res.observations == 3 and res.photos == 4, res.errors
+    assert res.references == 3 and res.seasons == {2023, 2024} and not res.errors
+    w = db.week_for_date(dt.date(2024, 10, 18), 2024)
+    obs = db.get_observation(db.query_one("SELECT id FROM varieties WHERE name='Meeker'")["id"], w["id"])
+    assert obs["bbch_code"] == 57 and len(db.list_photos(obs["id"])) == 2
+    regina = db.query_one("SELECT id FROM varieties WHERE name='Regina'")["id"]
+    assert db.get_metrics(db.query_one("SELECT id FROM varieties WHERE name='Meeker'")["id"], 2024)["historical_yield"] == 1.6
+    assert db.get_observation(regina, db.ensure_week(2024, 10)["id"])["bbch_code"] == 65
