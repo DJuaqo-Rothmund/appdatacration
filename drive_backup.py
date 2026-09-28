@@ -258,13 +258,14 @@ class DriveBackup:
             return f"Temporada {row['season']}-{row['season'] + 1}/{base}"
         return base
 
-    def enqueue(self, photo_id: int | None, path: str, flush: bool = True) -> int | None:
+    def enqueue(self, photo_id: int | None, path: str, flush: bool = True,
+                remote: str | None = None) -> int | None:
         if photo_id is not None and self.db.query_one(
                 "SELECT id FROM drive_queue WHERE photo_id=? AND path=?", (photo_id, path)):
             return None
         cur = self.db.execute(
             "INSERT INTO drive_queue(photo_id, path, name, created_at) VALUES (?,?,?,?)",
-            (photo_id, path, self._remote_name(photo_id, path), _now()))
+            (photo_id, path, remote or self._remote_name(photo_id, path), _now()))
         if flush:
             self.flush_async()
         return cur.lastrowid
@@ -282,6 +283,30 @@ class DriveBackup:
         if n:
             self.flush_async()
         return n
+
+    DB_BACKUP_EVERY_H = 24
+    DB_BACKUPS_KEPT = 5
+
+    def backup_database(self, force: bool = False) -> str | None:
+        """Copia diaria de la base (sin fotos, que ya están en Drive) a «Respaldos»."""
+        last = self.db.get_setting("drive_db_backup")
+        if not force and last and (_dt.datetime.now() - _dt.datetime.fromisoformat(last)
+                                   ).total_seconds() < self.DB_BACKUP_EVERY_H * 3600:
+            return None
+        from data_transfer import _checkpoint_copy
+        from platform_utils import data_subdir
+        folder = data_subdir("backups", "diarios")
+        dest = _checkpoint_copy(self.db, os.path.join(
+            folder, f"PhenoRubus_base_{_dt.datetime.now():%Y-%m-%d_%H%M}.sqlite3"))
+        old = sorted(f for f in os.listdir(folder) if f.endswith(".sqlite3"))
+        for f in old[:-self.DB_BACKUPS_KEPT]:
+            try:
+                os.remove(os.path.join(folder, f))
+            except OSError:
+                pass
+        self.db.set_setting("drive_db_backup", _now())
+        self.enqueue(None, dest, remote=f"Respaldos/{os.path.basename(dest)}")
+        return dest
 
     def retry_errors(self) -> None:
         self.db.execute("UPDATE drive_queue SET status='pending', attempts=0 WHERE status='error'")
@@ -374,7 +399,9 @@ class DriveBackup:
             parent = self._folder(d, parent)
         with open(path, "rb") as f:
             data = f.read()
-        mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+        ext = os.path.splitext(path)[1].lower()
+        mime = {".png": "image/png", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
+                ".html": "text/html"}.get(ext, "image/jpeg")
         boundary = uuid.uuid4().hex
         meta = json.dumps({"name": fname, "parents": [parent]}).encode()
         body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()

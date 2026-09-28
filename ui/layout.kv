@@ -833,9 +833,20 @@
                     text: "Ver bitácora de cambios"
                     on_release: root.show_audit()
                 GhostButton:
-                    icon: "database-export-outline"
-                    text: "Respaldar base de datos"
-                    on_release: root.backup()
+                    icon: "archive-arrow-down-outline"
+                    text: "Copia de seguridad completa (con fotos)"
+                    on_release: root.full_backup()
+                GhostButton:
+                    icon: "backup-restore"
+                    text: "Restaurar copia de seguridad"
+                    on_release: root.restore_backup()
+                GhostButton:
+                    icon: "file-import-outline"
+                    text: "Importar informes semanales"
+                    on_release: root.import_reports()
+                Muted:
+                    id: backup_text
+                    text: "La copia completa se guarda en Descargas › PhenoRubus. «Restaurar» acepta esa copia o el archivo .sqlite3 de «Respaldar base de datos» de versiones anteriores, y recupera las fotos de «Imágenes de Fenología». Los informes semanales (.html o .zip) completan lo que falte."
 
 <StatTile@GlassCard>:
     orientation: "vertical"

@@ -151,8 +151,9 @@ class FenoRubusApp(MDApp):
         # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
         Clock.schedule_once(lambda *_: self.observation, 2.5)
         # Sube lo que haya quedado en cola (sin red la última vez).
+        # y respalda la base en Drive una vez al día (las fotos ya se suben solas).
         if self.db.get_setting("drive_enabled", False):
-            Clock.schedule_once(lambda *_: self.drive.flush_async(), 6)
+            Clock.schedule_once(lambda *_: self.workers.submit(self._drive_daily), 6)
 
     def on_resume(self):
         self.week = self.db.current_week() if self.week is None else self.week
@@ -293,6 +294,25 @@ class FenoRubusApp(MDApp):
             self.media.share(path, mime or MIME.get(os.path.splitext(path)[1], "*/*"))
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo compartir: {exc}")
+
+    def _drive_daily(self):
+        try:
+            if self.drive.backup_database() is None:
+                self.drive.flush_async()
+        except Exception as exc:  # noqa: BLE001
+            print("drive daily backup:", exc)
+
+    def reload_data(self):
+        """Tras restaurar un respaldo: descarta cachés y vuelve a leer todo."""
+        for name in ("classifier", "reports"):
+            self.__dict__.pop(name, None)
+        self.week = self.db.current_week()
+        self.season = self.week["season"]
+        for name in ("observation", "variety", "ailab"):
+            if self.sm.has_screen(name):
+                self.sm.remove_widget(self.sm.get_screen(name))
+        self.reminders.apply()
+        self.refresh_home()
 
     def backup_photo(self, photo_id: int, path: str) -> None:
         """Encola la foto para respaldo en Google Drive (si está activado)."""

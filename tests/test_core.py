@@ -360,3 +360,85 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
     assert drive.flush() == 0 and drive.status()["message"] == "Esperando Wi-Fi"
     # «Subir anteriores» encola las fotos de la base que falten (la de pid ya está).
     assert drive.enqueue_existing() == 0
+
+
+def _fill_week(db, tmp_path, season=2026, n=3):
+    db.ensure_weeks(season, n)
+    out = []
+    for w in db.list_weeks(season)[:n]:
+        for v in db.list_varieties()[:2]:
+            obs = db.get_or_create_observation(v["id"], w["id"])
+            code = 10 + w["week_number"] * 5
+            db.update_observation(obs["id"], bbch_code=code, bbch_label=f"BBCH {code}",
+                                  notes=f"nota {v['name']} S{w['week_number']}")
+            for kind in ("canopy", "detail"):
+                p = synthetic_photo(code, kind, str(tmp_path / f"{v['id']}_{w['id']}_{kind}.jpg"), 1)
+                db.add_photo(obs["id"], kind, p, "camera",
+                             captured_at=f"2026-09-{7 + w['week_number']:02d}T10:00:00")
+            out.append((v, w))
+    return out
+
+
+def test_full_backup_roundtrip(db, tmp_path):
+    from data_transfer import full_backup, restore
+    _fill_week(db, tmp_path)
+    zpath = full_backup(db, str(tmp_path))
+    for r in db.query("SELECT path FROM photos"):
+        os.remove(r["path"])             # «reinstalación»: se pierden los archivos
+    fresh = Database(str(tmp_path / "nuevo.sqlite3"))
+    res = restore(fresh, zpath)
+    assert res.observations == 6 and res.photos == 12 and res.photos_restored == 12
+    assert all(os.path.exists(r["path"]) for r in fresh.query("SELECT path FROM photos"))
+    assert os.path.exists(res.safety_copy)
+    fresh.close()
+
+
+def test_restore_old_sqlite_relinks_public_photos(db, tmp_path, monkeypatch):
+    import shutil
+    import data_transfer as dt_
+    from platform_utils import slugify
+    pairs = _fill_week(db, tmp_path)
+    # Originales en la carpeta pública con el nombre que les daba la cámara.
+    public = tmp_path / "Imagenes de Fenologia"
+    public.mkdir()
+    for r in db.query("SELECT p.path, p.kind, p.captured_at, v.name, w.week_number FROM photos p "
+                      "JOIN observations o ON o.id=p.observation_id JOIN varieties v ON v.id=o.variety_id "
+                      "JOIN sampling_weeks w ON w.id=o.week_id"):
+        label = {"canopy": "canopia", "detail": "detalle"}[r["kind"]]
+        stamp = r["captured_at"][:10] + "_" + r["captured_at"][11:19].replace(":", "")
+        shutil.copyfile(r["path"], public / f"{slugify(r['name'])}_S{r['week_number']:02d}_{label}_{stamp}.jpg")
+    backup = tmp_path / "fenorubus_20260928.sqlite3"
+    dt_._checkpoint_copy(db, str(backup))
+    for r in db.query("SELECT path FROM photos"):
+        os.remove(r["path"])
+    monkeypatch.setattr(dt_, "public_photo_dirs", lambda: [str(public)])
+    fresh = Database(str(tmp_path / "nuevo.sqlite3"))
+    fresh.set_setting("drive_enabled", True)
+    res = dt_.restore(fresh, str(backup))
+    assert res.photos_relinked == 12 and res.photos_missing == 0
+    assert fresh.get_setting("drive_enabled") is True     # se conserva la conexión del teléfono
+    v, w = pairs[0]
+    obs = fresh.get_observation(v["id"], w["id"])
+    assert obs["notes"].startswith("nota") and obs["bbch_code"] == 15
+    fresh.close()
+
+
+def test_import_weekly_reports_html_and_zip(db, tmp_path):
+    from data_transfer import import_reports
+    pairs = _fill_week(db, tmp_path)
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    weeks = sorted({w["id"] for _v, w in pairs})
+    files = [rep.weekly(weeks[0]).path, rep.weekly(weeks[1], package="zip").path,
+             rep.weekly(weeks[2]).path]
+    fresh = Database(str(tmp_path / "nuevo.sqlite3"))
+    res = import_reports(fresh, files)
+    assert res.reports == 3 and res.bbch == 6 and res.photos == 12, res.summary()
+    v, w = pairs[-1]
+    fv = next(x for x in fresh.list_varieties() if x["name"] == v["name"])
+    fw = next(x for x in fresh.list_weeks(2026) if x["week_number"] == w["week_number"])
+    obs = fresh.get_observation(fv["id"], fw["id"])
+    assert obs["bbch_code"] == 10 + w["week_number"] * 5 and obs["notes"].startswith("nota")
+    assert set(fresh.get_photos(obs["id"])) == {"canopy", "detail"}
+    again = import_reports(fresh, files)                   # no duplica
+    assert again.photos == 0 and again.bbch == 0
+    fresh.close()

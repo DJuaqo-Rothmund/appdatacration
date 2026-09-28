@@ -209,7 +209,7 @@ class AndroidMedia:
         self._pending[RC_GALLERY_MULTI] = (callback, None)
         self.activity.startActivityForResult(intent, RC_GALLERY_MULTI)
 
-    def pick_document(self, callback: Callable[[str | None, str], None]) -> None:
+    def pick_document(self, callback: Callable[[str | None, str], None], exts=None) -> None:
         intent = self.Intent(self.Intent.ACTION_OPEN_DOCUMENT)
         intent.addCategory(self.Intent.CATEGORY_OPENABLE)
         intent.setType("*/*")
@@ -461,9 +461,9 @@ class DesktopMedia:
     def pick_images(self, callback) -> None:
         self.file_chooser(lambda p: callback([p] if p else [], "gallery"), (".jpg", ".jpeg", ".png"))
 
-    def pick_document(self, callback) -> None:
+    def pick_document(self, callback, exts=None) -> None:
         self.file_chooser(lambda p: callback(p, os.path.basename(p) if p else ""),
-                          (".pdf", ".txt", ".md", ".html", ".htm"))
+                          exts or (".pdf", ".txt", ".md", ".html", ".htm", ".csv", ".zip"))
 
     def share(self, path: str, mime: str, title: str = "") -> None:
         self.open(path, mime)

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-import shutil
 import threading
 
 from kivy.clock import Clock, mainthread
@@ -29,7 +28,7 @@ from kivymd.uix.screen import MDScreen
 from kivymd.uix.toolbar import MDTopAppBar
 
 import phenology as ph
-from android_bridge import store_photo
+from android_bridge import request_runtime_permissions, store_photo
 from notifications import FREQUENCIES, can_schedule_exact, request_exact_alarm_permission
 from platform_utils import IS_ANDROID, data_subdir, slugify
 from ui import theme
@@ -194,7 +193,7 @@ def confirm(title: str, text: str, actions: list[tuple[str, callable]]):
                 cb()
         return _run
 
-    buttons = [MDFlatButton(text="CANCELAR", on_release=wrap(None))]
+    buttons = [MDFlatButton(text="CANCELAR" if actions else "CERRAR", on_release=wrap(None))]
     buttons += [MDFlatButton(text=t.upper(), theme_text_color="Custom",
                              text_color=c(theme.BERRY if "ELIMIN" in t.upper() else theme.LEAF_DARK),
                              on_release=wrap(cb)) for t, cb in actions]
@@ -1361,15 +1360,122 @@ class SettingsTab(MDScreen):
                 for r in app().db.audit_trail(60)]
         list_dialog("Bitácora de cambios", rows)
 
-    def backup(self):
+    # ---------------------------------------------- copias de seguridad
+    def _busy(self, text):
+        self.ids.backup_text.text = text
+
+    def full_backup(self):
         a = app()
-        dest = os.path.join(data_subdir("backups"),
-                            f"fenorubus_{_dt.datetime.now():%Y%m%d_%H%M%S}.sqlite3")
-        with a.db._lock:
-            a.db.conn.execute("PRAGMA wal_checkpoint(FULL)")
-            shutil.copyfile(a.db.path, dest)
-        a.db.log("backup", "database", None, os.path.basename(dest))
-        a.share_file(dest, "application/x-sqlite3")
+        self._busy("Creando copia de seguridad…")
+
+        def work():
+            try:
+                from data_transfer import full_backup
+                path = full_backup(a.db)
+                a.media.export_to_downloads(path, "application/zip")
+                if a.db.get_setting("drive_enabled", False):
+                    a.drive.enqueue(None, path, remote=f"Respaldos/{os.path.basename(path)}")
+                size = os.path.getsize(path) / 1e6
+                msg = (f"Copia guardada en Descargas › PhenoRubus: {os.path.basename(path)} "
+                       f"({size:.1f} MB)" + (" · también se sube a Drive" if a.db.get_setting(
+                           "drive_enabled", False) else ""))
+                Clock.schedule_once(lambda *_: (self._busy(msg), a.toast("Copia de seguridad lista"),
+                                                self._offer_share(path)))
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+                Clock.schedule_once(lambda *_: (self._busy(f"No se pudo crear la copia: {error}"),))
+
+        a.workers.submit(work)
+
+    def _offer_share(self, path):
+        confirm("Copia de seguridad lista",
+                "Quedó en Descargas › PhenoRubus. ¿Quiere además enviarla (Drive, correo, WhatsApp…)?",
+                [("Compartir", lambda: app().share_file(path, "application/zip"))])
+
+    def restore_backup(self):
+        a = app()
+
+        def picked(path, name):
+            if not path:
+                return
+            if not path.lower().endswith((".zip", ".sqlite3", ".db")):
+                a.toast("Elija la copia .zip o el archivo .sqlite3")
+                return
+            confirm("Restaurar copia de seguridad",
+                    f"Se reemplazarán los datos actuales por los de «{name or os.path.basename(path)}». "
+                    "Antes se guarda automáticamente una copia de lo actual.",
+                    [("Restaurar", lambda: self._do_restore(path))])
+
+        a.media.pick_document(picked, exts=(".zip", ".sqlite3", ".db"))
+
+    def _do_restore(self, path):
+        a = app()
+        self._busy("Restaurando… no cierre la app.")
+
+        def progress(i, n):
+            if i % 10 == 0:
+                Clock.schedule_once(lambda *_: self._busy(f"Recuperando fotos… {i}/{n}"))
+
+        def work():
+            try:
+                from data_transfer import restore
+                res = restore(a.db, path, progress=progress)
+                Clock.schedule_once(lambda *_: self._restored(res, None))
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+                Clock.schedule_once(lambda *_: self._restored(None, error))
+
+        request_runtime_permissions(lambda _ok: a.workers.submit(work))
+
+    def _restored(self, res, error):
+        a = app()
+        if error:
+            self._busy(f"No se pudo restaurar: {error}")
+            return
+        a.reload_data()
+        self.refresh()
+        self._busy("Restaurado: " + res.summary())
+        text = res.summary()
+        if res.missing:
+            text += ("\n\nFotos sin archivo (puede recuperarlas con «Importar informes semanales» "
+                     "o volver a adjuntarlas desde la galería):\n• " + "\n• ".join(res.missing[:12]))
+            if len(res.missing) > 12:
+                text += f"\n… y {len(res.missing) - 12} más"
+        confirm("Datos restaurados", text, [])
+
+    def import_reports(self):
+        a = app()
+
+        def picked(path, name):
+            if not path:
+                return
+            if not path.lower().endswith((".html", ".htm", ".zip")):
+                a.toast("Elija un informe semanal (.html o .zip)")
+                return
+            self._busy(f"Leyendo {name or os.path.basename(path)}…")
+
+            def work():
+                try:
+                    from data_transfer import import_reports
+                    res = import_reports(a.db, [path])
+                    Clock.schedule_once(lambda *_: self._reports_done(res, None))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: self._reports_done(None, error))
+
+            a.workers.submit(work)
+
+        a.media.pick_document(picked, exts=(".html", ".htm", ".zip"))
+
+    def _reports_done(self, res, error):
+        a = app()
+        if error:
+            self._busy(f"No se pudo importar: {error}")
+            return
+        a.reload_data()
+        self.refresh()
+        self._busy("Importado: " + res.summary() + (" · " + "; ".join(res.skipped[:3]) if res.skipped else ""))
+        a.toast("Informe importado" if res.reports else "El archivo no es un informe semanal")
 
 
 # ===========================================================================
