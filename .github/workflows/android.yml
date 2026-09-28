@@ -64,6 +64,19 @@ jobs:
           echo "Versión: $VERSION"
       - name: Compilar APK (debug)
         run: yes | buildozer -v android debug
+      # Firma explícita con la clave del repositorio y verificación: garantiza que
+      # cada APK se pueda instalar como ACTUALIZACIÓN (misma firma) y que Google
+      # Drive reconozca la app (SHA-1 registrado). Si no coincide, falla la compilación.
+      - name: Firmar con la clave del repositorio y verificar
+        run: |
+          BT=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/* | sort -V | tail -1)
+          APK=$(ls bin/*.apk | head -1)
+          "$BT/zipalign" -f -p 4 "$APK" /tmp/aligned.apk
+          "$BT/apksigner" sign --ks android/debug.keystore --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android --out "$APK" /tmp/aligned.apk
+          "$BT/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
+          grep -qi "SHA-1 digest: edb0585ce094df75d479d547c10cc0810ef04038" /tmp/certs.txt
+          "$BT/aapt" dump badging "$APK" | head -1 || true
       - name: Guardar caché de SDK/NDK
         if: always()
         uses: actions/cache/save@v4
