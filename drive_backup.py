@@ -93,8 +93,9 @@ def explain(error: str) -> str:
     m = _re.search(r"ApiException:\s*(\d+)", error or "")
     if m and m[1] in API_HINTS:
         return f"{API_HINTS[m[1]]} (código {m[1]})"
-    if "ClassNotFound" in (error or "") or "NoClassDefFound" in (error or ""):
-        return "Faltan los servicios de Google Play en la app (compilación sin play-services-auth)."
+    if "ClassNotFound" in (error or "") or "NoClassDefFound" in (error or "") \
+            or "Class not found" in (error or ""):
+        return f"No se encontró un componente de Google Play en la app. Detalle: {error[-160:]}"
     return error
 
 
@@ -107,128 +108,176 @@ def _detach():
 
 
 class AndroidAuthorizer:
-    """Token OAuth de Drive vía `Identity.getAuthorizationClient(activity)`."""
+    """Token OAuth de Drive vía `Identity.getAuthorizationClient(activity)`.
+
+    Importante: en Android, pyjnius busca clases con JNI FindClass, que desde un hilo
+    creado por Python solo ve las clases del sistema (no las de la app, como Google
+    Play Services). Por eso toda llamada a clases de Google se hace en el hilo
+    principal de Kivy (`_on_main`); el hilo de fondo solo espera.
+    """
 
     AUTHORIZE_TIMEOUT = 45
     CONSENT_TIMEOUT = 300
+    GOOGLE_CLASSES = ("com.google.android.gms.auth.api.identity.Identity",
+                      "com.google.android.gms.auth.api.identity.AuthorizationRequest",
+                      "com.google.android.gms.auth.api.identity.AuthorizationResult",
+                      "com.google.android.gms.common.api.Scope")
 
     def __init__(self, log=None):
-        from jnius import autoclass  # type: ignore
         from android import activity  # type: ignore
-        self._autoclass = autoclass
         self.log = log or (lambda msg: None)
-        self.PythonActivity = autoclass("org.kivy.android.PythonActivity")
         self._pending = None          # (event, holder) de una autorización interactiva
         self._listeners = []          # referencias vivas para pyjnius
         activity.bind(on_activity_result=self._on_activity_result)
 
+    # ---------------------------------------------------------- hilo principal
+    @staticmethod
+    def _on_main(fn, timeout: float = 20):
+        """Ejecuta fn en el hilo principal de Kivy y devuelve su resultado."""
+        if threading.current_thread() is threading.main_thread():
+            return fn()
+        from kivy.clock import Clock
+        ev, box = threading.Event(), {}
+
+        def run(*_):
+            try:
+                box["value"] = fn()
+            except Exception as exc:  # noqa: BLE001
+                box["error"] = exc
+            ev.set()
+
+        Clock.schedule_once(run, 0)
+        if not ev.wait(timeout):
+            raise DriveError("La app no respondió (hilo principal ocupado)")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+    def preload(self) -> None:
+        """Carga las clases de Google (llamar en el hilo principal)."""
+        from jnius import autoclass  # type: ignore
+        for name in self.GOOGLE_CLASSES:
+            autoclass(name)
+
     def _request(self):
-        ac = self._autoclass
-        scopes = ac("java.util.ArrayList")()
-        scopes.add(ac("com.google.android.gms.common.api.Scope")(SCOPE))
-        req = ac("com.google.android.gms.auth.api.identity.AuthorizationRequest") \
+        from jnius import autoclass  # type: ignore
+        scopes = autoclass("java.util.ArrayList")()
+        scopes.add(autoclass("com.google.android.gms.common.api.Scope")(SCOPE))
+        req = autoclass("com.google.android.gms.auth.api.identity.AuthorizationRequest") \
             .builder().setRequestedScopes(scopes).build()
-        client = ac("com.google.android.gms.auth.api.identity.Identity") \
-            .getAuthorizationClient(self.PythonActivity.mActivity)
+        act = autoclass("org.kivy.android.PythonActivity").mActivity
+        client = autoclass("com.google.android.gms.auth.api.identity.Identity").getAuthorizationClient(act)
         return client, req
 
+    # ----------------------------------------------------------- autorización
     def get_token(self, interactive: bool, timeout: float | None = None) -> str:
-        from jnius import PythonJavaClass, cast, java_method  # type: ignore
-
         done = threading.Event()
         box: dict = {}
 
-        class Success(PythonJavaClass):
-            __javainterfaces__ = ["com/google/android/gms/tasks/OnSuccessListener"]
-            __javacontext__ = "app"
+        def start():
+            from jnius import PythonJavaClass, java_method  # type: ignore
 
-            @java_method("(Ljava/lang/Object;)V")
-            def onSuccess(self, result):  # noqa: N802
-                box["result"] = result
-                done.set()
+            class Success(PythonJavaClass):
+                __javainterfaces__ = ["com/google/android/gms/tasks/OnSuccessListener"]
+                __javacontext__ = "app"
 
-        class Failure(PythonJavaClass):
-            __javainterfaces__ = ["com/google/android/gms/tasks/OnFailureListener"]
-            __javacontext__ = "app"
+                @java_method("(Ljava/lang/Object;)V")
+                def onSuccess(self, result):  # noqa: N802
+                    box["result"] = result
+                    done.set()
 
-            @java_method("(Ljava/lang/Exception;)V")
-            def onFailure(self, exc):  # noqa: N802
-                try:
-                    box["error"] = exc.toString()
-                except Exception as e:  # noqa: BLE001
-                    box["error"] = repr(e)
-                done.set()
+            class Failure(PythonJavaClass):
+                __javainterfaces__ = ["com/google/android/gms/tasks/OnFailureListener"]
+                __javacontext__ = "app"
 
-        self.log("Preparando la solicitud a Google…")
-        try:
+                @java_method("(Ljava/lang/Exception;)V")
+                def onFailure(self, exc):  # noqa: N802
+                    try:
+                        box["error"] = exc.toString()
+                    except Exception as e:  # noqa: BLE001
+                        box["error"] = repr(e)
+                    done.set()
+
+            self.preload()
             client, req = self._request()
+            ok, ko = Success(), Failure()
+            self._listeners = [ok, ko]
+            task = client.authorize(req)
+            task.addOnSuccessListener(ok)
+            task.addOnFailureListener(ko)
+
+        self.log("Pidiendo autorización a Google…")
+        try:
+            self._on_main(start)
+        except DriveError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise DriveError(explain(f"No se pudo preparar la autorización: {exc}")) from exc
-        ok, ko = Success(), Failure()
-        self._listeners = [ok, ko]
-        self.log("Pidiendo autorización a Google…")
-        task = client.authorize(req)
-        task.addOnSuccessListener(ok)
-        task.addOnFailureListener(ko)
         if not done.wait(timeout or self.AUTHORIZE_TIMEOUT):
             raise DriveError("Google no respondió (¿Servicios de Google Play desactualizados o sin red?)")
         if "error" in box:
             raise DriveError(explain(box["error"]))
-        result = cast("com.google.android.gms.auth.api.identity.AuthorizationResult", box["result"])
-        if result.hasResolution():
+
+        def read_result():
+            from jnius import cast  # type: ignore
+            res = cast("com.google.android.gms.auth.api.identity.AuthorizationResult", box["result"])
+            if res.hasResolution():
+                return None, res.getPendingIntent()
+            return res.getAccessToken(), None
+
+        token, pending_intent = self._on_main(read_result)
+        if pending_intent is not None:
             if not interactive:
                 raise NeedsConsent("Conecte su cuenta de Google en Ajustes")
             self.log("Abriendo el selector de cuenta de Google…")
-            return self._resolve(result.getPendingIntent())
-        token = result.getAccessToken()
+            return self._resolve(pending_intent)
         if not token:
             raise DriveError("Google no entregó un token de acceso")
         return token
 
     def _resolve(self, pending_intent) -> str:
-        from android.runnable import run_on_ui_thread  # type: ignore
-
         ev, holder = threading.Event(), {}
         self._pending = (ev, holder)
-        launched = threading.Event()
 
-        @run_on_ui_thread
         def launch():
-            try:
-                # Versión de 6 argumentos (sin Bundle): evita ambigüedad de sobrecargas.
-                self.PythonActivity.mActivity.startIntentSenderForResult(
-                    pending_intent.getIntentSender(), RC_DRIVE_AUTH, None, 0, 0, 0)
-            except Exception as exc:  # noqa: BLE001
-                holder["error"] = f"No se pudo abrir el selector de cuenta: {exc}"
-                ev.set()
-            launched.set()
+            from jnius import autoclass  # type: ignore
+            act = autoclass("org.kivy.android.PythonActivity").mActivity
+            # Versión de 6 argumentos (sin Bundle): evita ambigüedad de sobrecargas.
+            act.startIntentSenderForResult(pending_intent.getIntentSender(), RC_DRIVE_AUTH,
+                                           None, 0, 0, 0)
 
-        launch()
-        if not launched.wait(15):
-            raise DriveError("No se pudo abrir el selector de cuenta de Google")
+        try:
+            self._on_main(launch)
+        except Exception as exc:  # noqa: BLE001
+            self._pending = None
+            raise DriveError(f"No se pudo abrir el selector de cuenta: {exc}") from exc
         if not ev.wait(self.CONSENT_TIMEOUT):  # el usuario elige cuenta y acepta
             self._pending = None
             raise DriveError("No se completó la conexión con Google (tiempo agotado)")
         if "error" in holder:
             raise DriveError(explain(holder["error"]))
-        return holder["token"]
+
+        def read(data=holder.get("data")):
+            client, _req = self._request()
+            return client.getAuthorizationResultFromIntent(data).getAccessToken()
+
+        try:
+            token = self._on_main(read)
+        except Exception as exc:  # noqa: BLE001 (ApiException de Java incluida)
+            raise DriveError(explain(str(exc)) or "Conexión cancelada") from exc
+        if not token:
+            raise DriveError("Google no entregó un token de acceso")
+        return token
 
     def _on_activity_result(self, request_code, result_code, data):
         if request_code != RC_DRIVE_AUTH or self._pending is None:
             return
         ev, holder = self._pending
         self._pending = None
-        try:
-            if data is None:
-                raise DriveError(f"Conexión cancelada (resultado {result_code})")
-            client, _req = self._request()
-            res = client.getAuthorizationResultFromIntent(data)
-            token = res.getAccessToken()
-            if not token:
-                raise DriveError("Google no entregó un token de acceso")
-            holder["token"] = token
-        except Exception as exc:  # noqa: BLE001 (ApiException de Java incluida)
-            holder["error"] = str(exc) or "Conexión cancelada"
+        if data is None:
+            holder["error"] = f"Conexión cancelada (resultado {result_code})"
+        else:
+            holder["data"] = data   # se interpreta en el hilo principal de Kivy
         ev.set()
 
 
