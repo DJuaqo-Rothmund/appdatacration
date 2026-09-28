@@ -781,6 +781,10 @@
                     id: drive_connect
                     text: "Conectar Google Drive"
                     on_release: root.drive_connect()
+                GhostButton:
+                    icon: "stethoscope"
+                    text: "Ver diagnóstico de conexión"
+                    on_release: root.drive_diagnostics()
                 MDBoxLayout:
                     id: drive_opts
                     orientation: "vertical"

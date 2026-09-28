@@ -73,13 +73,50 @@ def urllib_transport(method: str, url: str, headers: dict, body: bytes | None) -
 
 
 # --------------------------------------------------------------- autorización
+# Códigos de ApiException (CommonStatusCodes) más frecuentes al conectar.
+API_HINTS = {
+    "10": "DEVELOPER_ERROR: Google no reconoce la app. Revise en Google Cloud el ID de cliente "
+          "Android: paquete org.rubus.fenorubus y huella SHA-1 exacta.",
+    "12500": "Error al iniciar sesión: actualice Servicios de Google Play y revise la pantalla "
+             "de consentimiento (usuario de prueba agregado).",
+    "12501": "Conexión cancelada.",
+    "16": "Conexión cancelada.",
+    "7": "Sin conexión a internet.",
+    "8": "Error interno de Google: intente de nuevo.",
+    "17": "Servicios de Google Play no disponibles en este teléfono.",
+}
+
+
+def explain(error: str) -> str:
+    """Convierte «ApiException: 10: …» en una explicación útil."""
+    import re as _re
+    m = _re.search(r"ApiException:\s*(\d+)", error or "")
+    if m and m[1] in API_HINTS:
+        return f"{API_HINTS[m[1]]} (código {m[1]})"
+    if "ClassNotFound" in (error or "") or "NoClassDefFound" in (error or ""):
+        return "Faltan los servicios de Google Play en la app (compilación sin play-services-auth)."
+    return error
+
+
+def _detach():
+    try:
+        from jnius import detach  # type: ignore
+        detach()  # obligatorio al terminar un hilo de Python que usó Java
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class AndroidAuthorizer:
     """Token OAuth de Drive vía `Identity.getAuthorizationClient(activity)`."""
 
-    def __init__(self):
+    AUTHORIZE_TIMEOUT = 45
+    CONSENT_TIMEOUT = 300
+
+    def __init__(self, log=None):
         from jnius import autoclass  # type: ignore
         from android import activity  # type: ignore
         self._autoclass = autoclass
+        self.log = log or (lambda msg: None)
         self.PythonActivity = autoclass("org.kivy.android.PythonActivity")
         self._pending = None          # (event, holder) de una autorización interactiva
         self._listeners = []          # referencias vivas para pyjnius
@@ -95,8 +132,8 @@ class AndroidAuthorizer:
             .getAuthorizationClient(self.PythonActivity.mActivity)
         return client, req
 
-    def get_token(self, interactive: bool, timeout: float = 120) -> str:
-        from jnius import PythonJavaClass, java_method  # type: ignore
+    def get_token(self, interactive: bool, timeout: float | None = None) -> str:
+        from jnius import PythonJavaClass, cast, java_method  # type: ignore
 
         done = threading.Event()
         box: dict = {}
@@ -116,44 +153,64 @@ class AndroidAuthorizer:
 
             @java_method("(Ljava/lang/Exception;)V")
             def onFailure(self, exc):  # noqa: N802
-                box["error"] = exc.toString()
+                try:
+                    box["error"] = exc.toString()
+                except Exception as e:  # noqa: BLE001
+                    box["error"] = repr(e)
                 done.set()
 
+        self.log("Preparando la solicitud a Google…")
+        try:
+            client, req = self._request()
+        except Exception as exc:  # noqa: BLE001
+            raise DriveError(explain(f"No se pudo preparar la autorización: {exc}")) from exc
         ok, ko = Success(), Failure()
         self._listeners = [ok, ko]
-        client, req = self._request()
-        client.authorize(req).addOnSuccessListener(ok).addOnFailureListener(ko)
-        if not done.wait(timeout):
-            raise DriveError("Google no respondió a la autorización")
+        self.log("Pidiendo autorización a Google…")
+        task = client.authorize(req)
+        task.addOnSuccessListener(ok)
+        task.addOnFailureListener(ko)
+        if not done.wait(timeout or self.AUTHORIZE_TIMEOUT):
+            raise DriveError("Google no respondió (¿Servicios de Google Play desactualizados o sin red?)")
         if "error" in box:
-            raise DriveError(f"Autorización rechazada: {box['error']}")
-        from jnius import cast  # type: ignore
+            raise DriveError(explain(box["error"]))
         result = cast("com.google.android.gms.auth.api.identity.AuthorizationResult", box["result"])
         if result.hasResolution():
             if not interactive:
                 raise NeedsConsent("Conecte su cuenta de Google en Ajustes")
-            return self._resolve(result.getPendingIntent(), timeout)
+            self.log("Abriendo el selector de cuenta de Google…")
+            return self._resolve(result.getPendingIntent())
         token = result.getAccessToken()
         if not token:
             raise DriveError("Google no entregó un token de acceso")
         return token
 
-    def _resolve(self, pending_intent, timeout: float) -> str:
+    def _resolve(self, pending_intent) -> str:
         from android.runnable import run_on_ui_thread  # type: ignore
 
         ev, holder = threading.Event(), {}
         self._pending = (ev, holder)
+        launched = threading.Event()
 
         @run_on_ui_thread
         def launch():
-            self.PythonActivity.mActivity.startIntentSenderForResult(
-                pending_intent.getIntentSender(), RC_DRIVE_AUTH, None, 0, 0, 0, None)
+            try:
+                # Versión de 6 argumentos (sin Bundle): evita ambigüedad de sobrecargas.
+                self.PythonActivity.mActivity.startIntentSenderForResult(
+                    pending_intent.getIntentSender(), RC_DRIVE_AUTH, None, 0, 0, 0)
+            except Exception as exc:  # noqa: BLE001
+                holder["error"] = f"No se pudo abrir el selector de cuenta: {exc}"
+                ev.set()
+            launched.set()
 
         launch()
-        if not ev.wait(max(timeout, 300)):  # el usuario elige cuenta y acepta
-            raise DriveError("No se completó la conexión con Google")
+        if not launched.wait(15):
+            raise DriveError("No se pudo abrir el selector de cuenta de Google")
+        if not ev.wait(self.CONSENT_TIMEOUT):  # el usuario elige cuenta y acepta
+            self._pending = None
+            raise DriveError("No se completó la conexión con Google (tiempo agotado)")
         if "error" in holder:
-            raise DriveError(holder["error"])
+            raise DriveError(explain(holder["error"]))
         return holder["token"]
 
     def _on_activity_result(self, request_code, result_code, data):
@@ -163,12 +220,12 @@ class AndroidAuthorizer:
         self._pending = None
         try:
             if data is None:
-                raise DriveError("Conexión cancelada")
+                raise DriveError(f"Conexión cancelada (resultado {result_code})")
             client, _req = self._request()
             res = client.getAuthorizationResultFromIntent(data)
             token = res.getAccessToken()
             if not token:
-                raise DriveError("Conexión cancelada")
+                raise DriveError("Google no entregó un token de acceso")
             holder["token"] = token
         except Exception as exc:  # noqa: BLE001 (ApiException de Java incluida)
             holder["error"] = str(exc) or "Conexión cancelada"
@@ -217,8 +274,18 @@ class DriveBackup:
     @property
     def authorizer(self):
         if self._authorizer is None and IS_ANDROID:
-            self._authorizer = AndroidAuthorizer()
+            self._authorizer = AndroidAuthorizer(log=self.log)
         return self._authorizer
+
+    def log(self, message: str, error: bool = False) -> None:
+        """Paso visible en la tarjeta de Ajustes + historial para «Ver diagnóstico»."""
+        hist = self.db.get_setting("drive_log") or []
+        hist.append(f"{_dt.datetime.now():%d/%m %H:%M:%S} {'✗ ' if error else ''}{message}")
+        self.db.set_setting("drive_log", hist[-40:])
+        self._set_message(message)
+
+    def diagnostics(self) -> list[str]:
+        return list(reversed(self.db.get_setting("drive_log") or []))
 
     @property
     def available(self) -> bool:
@@ -317,19 +384,24 @@ class DriveBackup:
         """Autorización interactiva (desde Ajustes). callback(ok, mensaje)."""
         def work():
             try:
+                self.log("Conectando con Google…")
                 if not self.available:
                     raise DriveError("El respaldo en Drive está disponible en el teléfono (Android)")
                 token = self.authorizer.get_token(interactive=True)
                 self._token = (token, time.monotonic() + self.TOKEN_TTL)
                 self.db.set_setting("drive_enabled", True)
-                self._set_message("Cuenta conectada")
+                self.log("Cuenta conectada")
                 ok, msg = True, "Google Drive conectado"
             except Exception as exc:  # noqa: BLE001
-                ok, msg = False, str(exc)
+                ok, msg = False, explain(str(exc)) or exc.__class__.__name__
+                self.log(msg, error=True)
             if callback:
                 callback(ok, msg)
-            if ok:
-                self.flush()
+            try:
+                if ok:
+                    self.flush()
+            finally:
+                _detach()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -417,7 +489,13 @@ class DriveBackup:
     # --------------------------------------------------------------- envío
     def flush_async(self) -> None:
         if self.enabled:
-            threading.Thread(target=self.flush, daemon=True).start()
+            threading.Thread(target=self._flush_thread, daemon=True).start()
+
+    def _flush_thread(self) -> None:
+        try:
+            self.flush()
+        finally:
+            _detach()
 
     def flush(self) -> int:
         """Sube lo pendiente. Devuelve cuántas fotos se subieron."""
@@ -466,11 +544,14 @@ class DriveBackup:
             message, synced = ("Esperando Wi-Fi" if "Wi-Fi" in str(exc)
                                else "Sin conexión: se subirá al volver la red"), False
         except NeedsConsent as exc:
-            message, synced = str(exc), False
+            message, synced = explain(str(exc)), False
         except Exception as exc:  # noqa: BLE001
-            message, synced = f"Error: {str(exc)[:120]}", False
+            message, synced = f"Error: {explain(str(exc))[:160]}", False
         finally:
             self.running = False
             self._flush_lock.release()
-        self._set_message(message, synced=synced)
+        if synced:
+            self._set_message(message, synced=True)
+        else:
+            self.log(message, error=not message.startswith(("Esperando", "Sin conexión")))
         return uploaded

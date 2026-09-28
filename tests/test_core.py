@@ -515,3 +515,22 @@ def test_photo_names_date_variety_kind(db, tmp_path):
     assert res["relinked"] == 2 and res["missing"] == 0
     got = [os.path.basename(db.query_one("SELECT path FROM photos WHERE id=?", (i,))["path"]) for i in ids]
     assert got == [f"{base}.jpg", f"{base}-2.jpg"]
+
+
+def test_drive_connect_errors_are_explained_and_logged(db):
+    import threading
+    from drive_backup import DriveBackup, DriveError, explain
+    assert "SHA-1" in explain("com.google.android.gms.common.api.ApiException: 10: ")
+
+    class Auth:
+        def get_token(self, interactive):
+            raise DriveError("com.google.android.gms.common.api.ApiException: 10: ")
+
+    drive = DriveBackup(db, authorizer=Auth(), transport=lambda *a: (200, b"{}"), metered=lambda: False)
+    got, ev = {}, threading.Event()
+    drive.connect(lambda ok, msg: (got.update(ok=ok, msg=msg), ev.set()))
+    assert ev.wait(5)
+    assert got["ok"] is False and "SHA-1" in got["msg"]
+    log = drive.diagnostics()
+    assert "✗" in log[0] and "SHA-1" in log[0] and "Conectando" in log[-1]
+    assert drive.status()["enabled"] is False and "SHA-1" in drive.status()["message"]

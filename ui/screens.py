@@ -1258,12 +1258,31 @@ class SettingsTab(MDScreen):
         if not a.drive.available:
             a.toast("El respaldo en Google Drive funciona en el teléfono (Android).")
             return
-        a.toast("Elija su cuenta de Google y permita el acceso a Drive…")
+        a.toast("Conectando con Google… siga los pasos en pantalla")
 
         def done(ok, msg):
             Clock.schedule_once(lambda *_: (a.toast(msg), self.refresh_drive()))
 
         a.drive.connect(done)
+
+    def drive_diagnostics(self):
+        a = app()
+        lines = a.drive.diagnostics()
+        from platform_utils import app_version
+        from kivymd.uix.scrollview import MDScrollView
+        box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                          padding=(0, 0, 0, dp(8)))
+        head = f"PhenoRubus {app_version()} · paquete org.rubus.fenorubus"
+        for text in [head] + (lines or ["Sin registros: toque «Conectar Google Drive» y vuelva aquí."]):
+            box.add_widget(MDLabel(text=text, font_style="Body2", adaptive_height=True,
+                                   theme_text_color="Custom",
+                                   text_color=c(theme.BERRY if "✗" in text else theme.INK)))
+        sv = MDScrollView(size_hint_y=None, height=dp(380))
+        sv.add_widget(box)
+        dialog = MDDialog(title="Diagnóstico de Google Drive", type="custom", content_cls=sv,
+                          md_bg_color=DIALOG_BG,
+                          buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
+        dialog.open()
 
     def drive_disconnect(self):
         confirm("Desconectar Google Drive",
