@@ -442,3 +442,45 @@ def test_import_weekly_reports_html_and_zip(db, tmp_path):
     again = import_reports(fresh, files)                   # no duplica
     assert again.photos == 0 and again.bbch == 0
     fresh.close()
+
+
+def test_relink_early_version_timestamp_names(db, tmp_path):
+    import shutil
+    import datetime as _d
+    from data_transfer import relink_photos
+    db.ensure_weeks(2026, 1)
+    w = db.list_weeks(2026)[0]
+    folder = tmp_path / "FenoRubus"
+    folder.mkdir()
+    t0 = _d.datetime(2026, 9, 8, 10, 0, 0)
+    expected = {}
+    for i, v in enumerate(db.list_varieties()[:4]):
+        obs = db.get_or_create_observation(v["id"], w["id"])
+        for j, kind in enumerate(("canopy", "detail")):
+            shot = t0 + _d.timedelta(minutes=5 * i + 2 * j)          # se abre la cámara
+            src = synthetic_photo(30 + i, kind, str(tmp_path / f"o{i}{j}.jpg"), i * 2 + j)
+            name = f"FenoRubus_{shot:%Y%m%d_%H%M%S}.jpg"
+            shutil.copyfile(src, folder / name)
+            saved = shot + _d.timedelta(seconds=40)                     # se guarda el registro
+            pid = db.add_photo(obs["id"], kind, str(tmp_path / "borrada.jpg"), "camera",
+                               captured_at=saved.isoformat())
+            expected[pid] = os.path.getsize(folder / name)
+    # Una foto de galería no debe «robar» fotos de cámara.
+    gobs = db.get_or_create_observation(db.list_varieties()[5]["id"], w["id"])
+    db.add_photo(gobs["id"], "detail", str(tmp_path / "x.jpg"), "gallery",
+                 captured_at=(t0 + _d.timedelta(minutes=1)).isoformat())
+    res = relink_photos(db, [str(tmp_path / "vacia"), str(folder)])
+    assert res["relinked"] == 8 and res["missing"] == 1
+    from PIL import Image
+    for pid in expected:  # cada registro recibió su propia foto (comparando el contenido)
+        path = db.query_one("SELECT path FROM photos WHERE id=?", (pid,))["path"]
+        assert os.path.exists(path)
+    paths = [db.query_one("SELECT path FROM photos WHERE id=?", (p,))["path"] for p in expected]
+    assert len(set(paths)) == 8
+    # Contenido correcto: la miniatura de cada foto coincide con su original.
+    import numpy as np
+    for pid, (i, j) in zip(expected, [(i, j) for i in range(4) for j in range(2)]):
+        got = np.asarray(Image.open(db.query_one("SELECT path FROM photos WHERE id=?", (pid,))["path"])
+                         .convert("L").resize((16, 16)), float)
+        ref = np.asarray(Image.open(tmp_path / f"o{i}{j}.jpg").convert("L").resize((16, 16)), float)
+        assert np.abs(got - ref).mean() < 8

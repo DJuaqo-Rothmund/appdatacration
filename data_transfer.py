@@ -47,8 +47,10 @@ def public_photo_dirs() -> list[str]:
                 Environment.DIRECTORY_PICTURES).getAbsolutePath()
         except Exception:  # noqa: BLE001
             base = "/storage/emulated/0/Pictures"
-        return [os.path.join(base, PUBLIC_PHOTO_DIR)]
-    return [os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)]
+    else:
+        base = os.path.join(os.path.expanduser("~"), "Pictures")
+    # «FenoRubus»: carpeta de las primeras versiones (fotos «FenoRubus_AAAAMMDD_HHMMSS.jpg»).
+    return [os.path.join(base, PUBLIC_PHOTO_DIR), os.path.join(base, "FenoRubus")]
 
 
 def _checkpoint_copy(db, dest: str) -> str:
@@ -99,7 +101,7 @@ class RestoreResult:
         if self.photos_restored:
             parts.append(f"{self.photos_restored} fotos restauradas del respaldo")
         if self.photos_relinked:
-            parts.append(f"{self.photos_relinked} recuperadas de «{PUBLIC_PHOTO_DIR}»")
+            parts.append(f"{self.photos_relinked} recuperadas de la carpeta de fotos del teléfono")
         if self.photos_missing:
             parts.append(f"{self.photos_missing} sin archivo")
         return " · ".join(parts)
@@ -184,47 +186,90 @@ _NAME_RE = re.compile(r"^(?P<prefix>.+_S\d{2}_(?:canopia|detalle))_(?P<stamp>\d{
                       re.IGNORECASE)
 
 
-def _scan_public(dirs: list[str]) -> dict[str, list[tuple[_dt.datetime, str]]]:
+# Nombres sin variedad (primeras versiones o cámara sin datos del registro): solo la hora.
+_TIME_RES = [(re.compile(r"^FenoRubus_(\d{8}_\d{6})\.jpe?g$", re.I), "%Y%m%d_%H%M%S"),
+             (re.compile(r"^PhenoRubus_(\d{4}-\d{2}-\d{2}_\d{6})\.jpe?g$", re.I), "%Y-%m-%d_%H%M%S")]
+# La foto se nombra al abrir la cámara y el registro se guarda al volver de ella.
+TIME_WINDOW_BEFORE = _dt.timedelta(minutes=20)
+TIME_WINDOW_AFTER = _dt.timedelta(minutes=2)
+
+
+def _scan_public(dirs: list[str]):
     index: dict[str, list] = {}
+    timed: list[tuple[_dt.datetime, str]] = []
     for d in dirs:
         if not os.path.isdir(d):
             continue
         for name in os.listdir(d):
             m = _NAME_RE.match(name)
-            if not m:
+            if m:
+                when = _dt.datetime.strptime(m["stamp"], "%Y-%m-%d_%H%M%S")
+                index.setdefault(m["prefix"].lower(), []).append((when, os.path.join(d, name)))
                 continue
-            when = _dt.datetime.strptime(m["stamp"], "%Y-%m-%d_%H%M%S")
-            index.setdefault(m["prefix"].lower(), []).append((when, os.path.join(d, name)))
-    return index
+            for rx, fmt in _TIME_RES:
+                t = rx.match(name)
+                if t:
+                    timed.append((_dt.datetime.strptime(t[1], fmt), os.path.join(d, name)))
+                    break
+    return index, timed
+
+
+def _when(text) -> _dt.datetime | None:
+    try:
+        return _dt.datetime.fromisoformat((text or "")[:19])
+    except ValueError:
+        return None
 
 
 def relink_photos(db, dirs: list[str] | None = None) -> dict:
     """Vuelve a enlazar fotos sin archivo con los originales de la carpeta pública."""
-    index = _scan_public(dirs if dirs is not None else public_photo_dirs())
+    index, timed = _scan_public(dirs if dirs is not None else public_photo_dirs())
     used: set[str] = set()
     relinked = missing = 0
     items = []
     rows = db.query(
-        "SELECT p.id, p.path, p.kind, p.captured_at, v.name AS variety, w.week_number, w.season "
+        "SELECT p.id, p.path, p.kind, p.source, p.captured_at, v.name AS variety, w.week_number, w.season "
         "FROM photos p JOIN observations o ON o.id = p.observation_id "
         "JOIN varieties v ON v.id = o.variety_id JOIN sampling_weeks w ON w.id = o.week_id "
         "ORDER BY p.id")
+    def link(r, src):
+        used.add(src)
+        dest_dir = data_subdir("photos", f"T{r['season']}", f"S{r['week_number']:02d}")
+        _set_path(db, r["id"], store_photo(src, dest_dir, f"{slugify(r['variety'])}_{r['kind']}"))
+
+    pending = []
+    # 1) Nombre descriptivo «variedad_S03_detalle_fecha» (versiones recientes).
     for r in rows:
         if os.path.exists(r["path"]):
             continue
         prefix = f"{slugify(r['variety'])}_S{r['week_number']:02d}_{KIND_LABEL.get(r['kind'], r['kind'])}"
         cands = [c for c in index.get(prefix.lower(), []) if c[1] not in used]
         if cands:
-            try:
-                ref = _dt.datetime.fromisoformat((r["captured_at"] or "")[:19])
-            except ValueError:
-                ref = None
-            best = min(cands, key=lambda c: abs((c[0] - ref).total_seconds()) if ref else 0)
-            used.add(best[1])
-            dest_dir = data_subdir("photos", f"T{r['season']}", f"S{r['week_number']:02d}")
-            _set_path(db, r["id"], store_photo(best[1], dest_dir, f"{slugify(r['variety'])}_{r['kind']}"))
+            ref = _when(r["captured_at"])
+            link(r, min(cands, key=lambda c: abs((c[0] - ref).total_seconds()) if ref else 0)[1])
             relinked += 1
         else:
+            pending.append(r)
+    # 2) Solo fecha y hora (primeras versiones): la foto de cámara más cercana antes de
+    #    guardarse el registro; se asignan primero las parejas más cercanas.
+    pairs = []
+    for r in pending:
+        ref = _when(r["captured_at"])
+        if ref is None or (r["source"] or "camera") != "camera":
+            continue
+        for when, path in timed:
+            if ref - TIME_WINDOW_BEFORE <= when <= ref + TIME_WINDOW_AFTER:
+                pairs.append((abs((ref - when).total_seconds()), r["id"], path))
+    done_rows: set[int] = set()
+    by_id = {r["id"]: r for r in pending}
+    for _gap, rid, path in sorted(pairs):
+        if rid in done_rows or path in used:
+            continue
+        link(by_id[rid], path)
+        done_rows.add(rid)
+        relinked += 1
+    for r in pending:
+        if r["id"] not in done_rows:
             missing += 1
             items.append(f"{r['variety']} · S{r['week_number']} · {KIND_LABEL.get(r['kind'], r['kind'])}")
     return {"relinked": relinked, "missing": missing, "items": items}
