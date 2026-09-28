@@ -194,13 +194,24 @@ TIME_WINDOW_BEFORE = _dt.timedelta(minutes=20)
 TIME_WINDOW_AFTER = _dt.timedelta(minutes=2)
 
 
+# Nombre actual «28092026-C11G.jpg» («-2», «-3»… o « (1)» si Android lo duplicó).
+_DATED_RE = re.compile(r"^(?P<key>\d{8}-[A-Za-z0-9]+[GD])(?:-(?P<seq>\d+))?(?: \((?P<dup>\d+)\))?\.jpe?g$",
+                       re.IGNORECASE)
+
+
 def _scan_public(dirs: list[str]):
     index: dict[str, list] = {}
+    dated: dict[str, list] = {}
     timed: list[tuple[_dt.datetime, str]] = []
     for d in dirs:
         if not os.path.isdir(d):
             continue
         for name in os.listdir(d):
+            m = _DATED_RE.match(name)
+            if m:
+                order = (int(m["seq"] or 1), int(m["dup"] or 0))
+                dated.setdefault(m["key"].lower(), []).append((order, os.path.join(d, name)))
+                continue
             m = _NAME_RE.match(name)
             if m:
                 when = _dt.datetime.strptime(m["stamp"], "%Y-%m-%d_%H%M%S")
@@ -211,7 +222,9 @@ def _scan_public(dirs: list[str]):
                 if t:
                     timed.append((_dt.datetime.strptime(t[1], fmt), os.path.join(d, name)))
                     break
-    return index, timed
+    for v in dated.values():
+        v.sort()
+    return index, dated, timed
 
 
 def _when(text) -> _dt.datetime | None:
@@ -223,25 +236,36 @@ def _when(text) -> _dt.datetime | None:
 
 def relink_photos(db, dirs: list[str] | None = None) -> dict:
     """Vuelve a enlazar fotos sin archivo con los originales de la carpeta pública."""
-    index, timed = _scan_public(dirs if dirs is not None else public_photo_dirs())
+    index, dated, timed = _scan_public(dirs if dirs is not None else public_photo_dirs())
     used: set[str] = set()
     relinked = missing = 0
     items = []
     rows = db.query(
-        "SELECT p.id, p.path, p.kind, p.source, p.captured_at, v.name AS variety, w.week_number, w.season "
+        "SELECT p.id, p.path, p.kind, p.source, p.captured_at, v.name AS variety, v.code AS vcode, "
+        "w.week_number, w.season, w.start_date "
         "FROM photos p JOIN observations o ON o.id = p.observation_id "
         "JOIN varieties v ON v.id = o.variety_id JOIN sampling_weeks w ON w.id = o.week_id "
         "ORDER BY p.id")
+
+    def base_name(r):
+        return ph.photo_basename({"name": r["variety"], "code": r["vcode"]}, r["start_date"], r["kind"])
+
     def link(r, src):
         used.add(src)
         dest_dir = data_subdir("photos", f"T{r['season']}", f"S{r['week_number']:02d}")
-        _set_path(db, r["id"], store_photo(src, dest_dir, f"{slugify(r['variety'])}_{r['kind']}"))
+        _set_path(db, r["id"], store_photo(src, dest_dir, base_name(r), exact=True))
 
     pending = []
-    # 1) Nombre descriptivo «variedad_S03_detalle_fecha» (versiones recientes).
     for r in rows:
         if os.path.exists(r["path"]):
             continue
+        # 1) Nombre actual «28092026-C11G» (fecha de la semana + variedad + G/D).
+        cands = [c for c in dated.get(base_name(r).lower(), []) if c[1] not in used]
+        if cands:
+            link(r, cands[0][1])
+            relinked += 1
+            continue
+        # 2) Nombre descriptivo «variedad_S03_detalle_fecha» (versiones de septiembre).
         prefix = f"{slugify(r['variety'])}_S{r['week_number']:02d}_{KIND_LABEL.get(r['kind'], r['kind'])}"
         cands = [c for c in index.get(prefix.lower(), []) if c[1] not in used]
         if cands:
@@ -250,7 +274,7 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
             relinked += 1
         else:
             pending.append(r)
-    # 2) Solo fecha y hora (primeras versiones): la foto de cámara más cercana antes de
+    # 3) Solo fecha y hora (primeras versiones): la foto de cámara más cercana antes de
     #    guardarse el registro; se asignan primero las parejas más cercanas.
     pairs = []
     for r in pending:
@@ -438,7 +462,8 @@ def import_reports(db, paths: list[str], progress=None) -> ReportImport:
                 with open(tmp, "wb") as f:
                     f.write(data)
                 dest_dir = data_subdir("photos", f"T{week['season']}", f"S{week['week_number']:02d}")
-                stored = store_photo(tmp, dest_dir, f"{slugify(vname)}_{kind}_informe")
+                stored = store_photo(tmp, dest_dir, ph.photo_basename(v, week["start_date"], kind),
+                                     exact=True)
                 if kind in missing_file:
                     _set_path(db, missing_file[kind]["id"], stored)
                 else:

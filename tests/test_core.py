@@ -484,3 +484,34 @@ def test_relink_early_version_timestamp_names(db, tmp_path):
                          .convert("L").resize((16, 16)), float)
         ref = np.asarray(Image.open(tmp_path / f"o{i}{j}.jpg").convert("L").resize((16, 16)), float)
         assert np.abs(got - ref).mean() < 8
+
+
+def test_photo_names_date_variety_kind(db, tmp_path):
+    import shutil
+    from android_bridge import store_photo
+    from data_transfer import relink_photos
+    assert ph.photo_basename({"name": "Código 11", "code": "C11"}, "2026-09-28", "canopy") == "28092026-C11G"
+    assert ph.photo_basename({"name": "Meeker", "code": "MEE"}, "2026-09-21", "detail") == "21092026-MeeD"
+    assert ph.photo_basename({"name": "Tulameen", "code": ""}, "2026-09-21", "detail", 2) == "21092026-TulD-2"
+    src = synthetic_photo(55, "detail", str(tmp_path / "s.jpg"), 0)
+    out = tmp_path / "out"
+    names = [os.path.basename(store_photo(src, str(out), "21092026-MeeD", exact=True)) for _ in range(3)]
+    assert names == ["21092026-MeeD.jpg", "21092026-MeeD-2.jpg", "21092026-MeeD-3.jpg"]
+
+    # Restaurar: se reconocen los nombres nuevos en la carpeta pública.
+    db.ensure_weeks(2026, 3)
+    w = db.list_weeks(2026)[2]
+    v = next(x for x in db.list_varieties() if x["name"] == "Meeker")
+    obs = db.get_or_create_observation(v["id"], w["id"])
+    public = tmp_path / "pub"
+    public.mkdir()
+    base = ph.photo_basename(v, w["start_date"], "detail")
+    ids = []
+    for i, suffix in enumerate(["", "-2"]):
+        shutil.copyfile(synthetic_photo(60 + i, "detail", str(tmp_path / f"p{i}.jpg"), i),
+                        public / f"{base}{suffix}.jpg")
+        ids.append(db.add_photo(obs["id"], "detail", str(tmp_path / f"borrada{i}.jpg"), "camera"))
+    res = relink_photos(db, [str(public)])
+    assert res["relinked"] == 2 and res["missing"] == 0
+    got = [os.path.basename(db.query_one("SELECT path FROM photos WHERE id=?", (i,))["path"]) for i in ids]
+    assert got == [f"{base}.jpg", f"{base}-2.jpg"]

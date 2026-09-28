@@ -41,11 +41,30 @@ PhotoCallback = Callable[[str | None, str], None]   # (ruta_temporal | None, ori
 # ===========================================================================
 # Utilidades comunes
 # ===========================================================================
-def store_photo(src: str, dest_dir: str, basename: str, max_side: int = 1600) -> str:
-    """Normaliza (EXIF, tamaño, JPEG q88) y guarda la foto en el almacenamiento de la app."""
+def _reserve(dest_dir: str, base: str) -> str:
+    """Primer nombre libre: base.jpg, base-2.jpg, base-3.jpg… (reservado de forma atómica)."""
+    n = 1
+    while True:
+        dest = os.path.join(dest_dir, f"{base}.jpg" if n == 1 else f"{base}-{n}.jpg")
+        try:
+            os.close(os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return dest
+        except FileExistsError:
+            n += 1
+
+
+def store_photo(src: str, dest_dir: str, basename: str, max_side: int = 1600,
+                exact: bool = False) -> str:
+    """Normaliza (EXIF, tamaño, JPEG q88) y guarda la foto en el almacenamiento de la app.
+
+    exact=True: usa `basename` tal cual (+ «-2», «-3»… si ya existe) en vez de agregar la hora.
+    """
     os.makedirs(dest_dir, exist_ok=True)
-    stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(dest_dir, f"{basename}_{stamp}.jpg")
+    if exact:
+        dest = _reserve(dest_dir, basename)
+    else:
+        stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(dest_dir, f"{basename}_{stamp}.jpg")
     img = Image.open(src)
     # Decodifica el JPEG ya reducido (escalado DCT 1/2, 1/4...): mucho más rápido y
     # con menos memoria que abrir la foto de 12 MP a tamaño completo.
@@ -161,12 +180,17 @@ class AndroidMedia:
         Clock.schedule_once(lambda _dt: callback(*args), 0)
 
     # ---------------------------------------------------------- cámara
-    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None) -> None:
-        """La cámara escribe la foto original directamente en «Imágenes de Fenología»."""
+    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None,
+                   exact: bool = False) -> None:
+        """La cámara escribe la foto original directamente en «Imágenes de Fenología».
+
+        exact=True: el archivo se llama exactamente `name_hint`.jpg (p. ej. 28092026-C11G.jpg).
+        """
         from jnius import autoclass, cast  # type: ignore
         values = self.ContentValues()
         stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
-        name = f"{name_hint}_{stamp}.jpg" if name_hint else f"PhenoRubus_{stamp}.jpg"
+        name = (f"{name_hint}.jpg" if exact and name_hint else
+                f"{name_hint}_{stamp}.jpg" if name_hint else f"PhenoRubus_{stamp}.jpg")
         values.put(self.MediaColumns.DISPLAY_NAME, name)
         values.put(self.MediaColumns.MIME_TYPE, "image/jpeg")
         if self.api >= 29:
@@ -444,14 +468,18 @@ class DesktopMedia:
         self.tmp_dir = tmp_dir
         self.file_chooser = file_chooser
 
-    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None) -> None:
+    def take_photo(self, callback: PhotoCallback, name_hint: str | None = None,
+                   exact: bool = False) -> None:
         """En PC se elige un archivo y se copia a ~/Pictures/Imágenes de Fenología."""
         def chosen(path):
             if path:
                 folder = os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)
                 os.makedirs(folder, exist_ok=True)
-                stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
-                shutil.copyfile(path, os.path.join(folder, f"{name_hint or 'PhenoRubus'}_{stamp}.jpg"))
+                if exact and name_hint:
+                    shutil.copyfile(path, _reserve(folder, name_hint))
+                else:
+                    stamp = f"{_dt.datetime.now():%Y-%m-%d_%H%M%S}"
+                    shutil.copyfile(path, os.path.join(folder, f"{name_hint or 'PhenoRubus'}_{stamp}.jpg"))
             callback(path, "camera")
         self.file_chooser(chosen, (".jpg", ".jpeg", ".png"))
 

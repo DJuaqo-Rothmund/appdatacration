@@ -20,8 +20,12 @@ varietales de frambueso**, pensada para trabajar en terreno **sin conexión** (o
 * **Semana de inicio configurable** (Ajustes): cualquier fecha como Semana 1; por defecto la
   semana del 7 de septiembre, con botón para restablecerla.
 * **Fotos en el teléfono:** las tomadas con la cámara de la app quedan en
-  *Imágenes › Imágenes de Fenología* con nombres descriptivos (variedad, semana, tipo), listas
-  para respaldarse con Google Fotos (*Biblioteca › Fotos del dispositivo › activar copia*).
+  *Imágenes › Imágenes de Fenología*, listas para respaldarse con Google Fotos
+  (*Biblioteca › Fotos del dispositivo › activar copia*). Nombre de cada foto (igual en el
+  teléfono, en la app y en Drive): `ddmmaaaa-<Variedad><G|D>`, con la fecha de inicio de la
+  semana de muestreo, la abreviatura de la variedad (su campo «Código / abreviatura») y
+  G = general (canopia) o D = detalle; p. ej. `28092026-C11G.jpg`, `21092026-MeeD.jpg`.
+  Las fotos adicionales del mismo registro llevan `-2`, `-3`…
 * **Optimizada para gama media/baja:** tarjetas livianas (sin MDCard), pantallas y módulos
   pesados (numpy, IA, Jinja2) cargados bajo demanda, fotos y miniaturas en segundo plano,
   sin MSAA, SQLite en WAL/NORMAL.

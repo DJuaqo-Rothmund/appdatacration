@@ -237,3 +237,38 @@ def expected_bbch_for_week(week_number: int) -> float:
             t = (week_number - w0) / (w1 - w0)
             return b0 + t * (b1 - b0)
     return float(pts[-1][1])
+
+
+# ---------------------------------------------------------------------------
+# Nombre de archivo de las fotos: «ddmmaaaa-<Variedad><G|D>», p. ej. 28092026-C11G
+# (fecha = inicio de la semana de muestreo; G = general/canopia, D = detalle).
+# ---------------------------------------------------------------------------
+PHOTO_KIND_LETTER = {"canopy": "G", "detail": "D"}
+
+
+def variety_tag(name: str, code: str | None = None) -> str:
+    """Abreviatura de la variedad: su código («C11», «MEE» → «Mee») o derivada del nombre."""
+    import re
+    import unicodedata
+
+    def clean(t):
+        t = unicodedata.normalize("NFKD", t or "")
+        return re.sub(r"[^A-Za-z0-9]", "", "".join(ch for ch in t if not unicodedata.combining(ch)))
+
+    tag = clean(code)
+    if not tag:
+        digits = re.findall(r"\d+", name or "")
+        letters = clean(name)
+        tag = (letters[:1] + digits[0]) if digits and letters else letters[:3]
+    if tag.isalpha() and len(tag) >= 3:
+        tag = tag.capitalize()
+    return tag or "Var"
+
+
+def photo_basename(variety: dict, week_start, kind: str, seq: int = 1) -> str:
+    import datetime as _d
+    if isinstance(week_start, str):
+        week_start = _d.date.fromisoformat(week_start[:10])
+    base = f"{week_start:%d%m%Y}-{variety_tag(variety.get('name', ''), variety.get('code'))}" \
+           f"{PHOTO_KIND_LETTER.get(kind, 'X')}"
+    return base if seq <= 1 else f"{base}-{seq}"

@@ -30,7 +30,7 @@ from kivymd.uix.toolbar import MDTopAppBar
 import phenology as ph
 from android_bridge import request_runtime_permissions, store_photo
 from notifications import FREQUENCIES, can_schedule_exact, request_exact_alarm_permission
-from platform_utils import IS_ANDROID, data_subdir, slugify
+from platform_utils import IS_ANDROID, data_subdir
 from ui import theme
 from ui.theme import c
 
@@ -688,8 +688,9 @@ class ObservationScreen(MDScreen):
                 error = None
                 try:
                     dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
+                    base = ph.photo_basename(self.variety, self.week["start_date"], kind)
                     for tmp in paths:
-                        path = store_photo(tmp, dest_dir, f"{slugify(self.variety['name'])}_{kind}")
+                        path = store_photo(tmp, dest_dir, base, exact=True)
                         pid = a.db.add_photo(obs_id, kind, path, source=origin)
                         a.thumb(path, 640)
                         a.thumb(path, 160)
@@ -713,9 +714,10 @@ class ObservationScreen(MDScreen):
             a.workers.submit(work)
 
         if source == "camera":
-            label = {"canopy": "canopia", "detail": "detalle"}[kind]
-            hint = (f"{slugify(self.variety['name'])}_S{self.week['week_number']:02d}_{label}")
-            a.media.take_photo(done, hint)
+            # Mismo nombre que en la app y en Drive: 28092026-C11G, 28092026-C11G-2…
+            seq = len(a.db.list_photos(self.obs["id"], kind)) + 1
+            hint = ph.photo_basename(self.variety, self.week["start_date"], kind, seq)
+            a.media.take_photo(done, hint, exact=True)
         else:
             a.media.pick_images(done)
 
