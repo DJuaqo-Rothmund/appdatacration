@@ -82,3 +82,12 @@ def resource_path(*parts: str) -> str:
 def slugify(text: str) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower() or "informe"
+
+
+def app_version() -> str:
+    """Versión instalada (la escribe CI en version.txt; «dev» al ejecutar desde el código)."""
+    try:
+        with open(resource_path("version.txt"), encoding="utf-8") as f:
+            return f.read().strip() or "dev"
+    except OSError:
+        return "dev"

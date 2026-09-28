@@ -30,7 +30,7 @@ from kivymd.uix.toolbar import MDTopAppBar
 import phenology as ph
 from android_bridge import request_runtime_permissions, store_photo
 from notifications import FREQUENCIES, can_schedule_exact, request_exact_alarm_permission
-from platform_utils import IS_ANDROID, data_subdir
+from platform_utils import IS_ANDROID, app_version, data_subdir
 from ui import theme
 from ui.theme import c
 
@@ -1199,7 +1199,7 @@ class SettingsTab(MDScreen):
         engine = f"Extractor: {ext.extractor.name} · " if ext else ""
         self.ids.ai_text.text = (f"{engine}{n} fotos de referencia. "
                                  "Todo el análisis se ejecuta en el teléfono, sin conexión.")
-        self.ids.data_text.text = f"Datos locales: {a.db.path}"
+        self.ids.data_text.text = f"PhenoRubus versión {app_version()} · datos locales: {a.db.path}"
         self.refresh_drive()
 
     # ------------------------------------------------ respaldo en Google Drive

@@ -54,6 +54,14 @@ jobs:
           mkdir -p ~/.android
           cp android/debug.keystore ~/.android/debug.keystore
           keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -E "SHA1|SHA256"
+      # Versión creciente en cada compilación (1.1.<n.º de ejecución>): Android la
+      # instala como ACTUALIZACIÓN encima de la anterior, conservando los datos.
+      - name: Número de versión
+        run: |
+          VERSION="1.1.${{ github.run_number }}"
+          sed -i "s/^version = .*/version = $VERSION/" buildozer.spec
+          echo "$VERSION" > version.txt
+          echo "Versión: $VERSION"
       - name: Compilar APK (debug)
         run: yes | buildozer -v android debug
       - name: Guardar caché de SDK/NDK

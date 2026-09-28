@@ -209,6 +209,18 @@ buildozer android release           # genera .aab (android.release_artifact = aa
 
 ---
 
+## 4a. Actualizar la app sin desinstalar
+
+Android instala un APK encima del anterior (conservando todos los datos) solo si:
+
+1. **Mismo paquete**: `org.rubus.fenorubus` (no cambiar `package.name` / `package.domain`).
+2. **Misma firma**: CI firma siempre con `android/debug.keystore` del repositorio.
+   **No borrar ni regenerar ese archivo**: con otra clave habría que desinstalar.
+3. **Versión igual o mayor**: CI numera cada compilación `1.1.<n.º de ejecución>`
+   (visible en *Ajustes › Trazabilidad y datos*).
+
+Para actualizar: descargar el APK nuevo, abrirlo y tocar **Actualizar**.
+
 ## 4b. Respaldo de fotos en Google Drive
 
 Cada foto nueva queda en el teléfono (carpeta «Imágenes de Fenología» para las de
