@@ -47,6 +47,13 @@ jobs:
           path: ~/.buildozer
           key: buildozer-sdk-${{ runner.os }}-${{ github.run_id }}
           restore-keys: buildozer-sdk-${{ runner.os }}-
+      # Firma estable: Google Drive (OAuth) reconoce la app por su huella SHA-1,
+      # así que todas las compilaciones usan la misma clave de depuración del repo.
+      - name: Clave de firma estable
+        run: |
+          mkdir -p ~/.android
+          cp android/debug.keystore ~/.android/debug.keystore
+          keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -E "SHA1|SHA256"
       - name: Compilar APK (debug)
         run: yes | buildozer -v android debug
       - name: Guardar caché de SDK/NDK

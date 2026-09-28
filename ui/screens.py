@@ -1199,6 +1199,97 @@ class SettingsTab(MDScreen):
         self.ids.ai_text.text = (f"{engine}{n} fotos de referencia. "
                                  "Todo el análisis se ejecuta en el teléfono, sin conexión.")
         self.ids.data_text.text = f"Datos locales: {a.db.path}"
+        self.refresh_drive()
+
+    # ------------------------------------------------ respaldo en Google Drive
+    def refresh_drive(self, st=None):
+        a = app()
+        drive = a.drive
+        if not getattr(self, "_drive_hooked", False):
+            self._drive_hooked = True
+            drive.listeners.append(lambda status: Clock.schedule_once(
+                lambda *_: self.refresh_drive(status)))
+        st = st or drive.status()
+        on = st["enabled"]
+        total = st["pending"] + st["done"] + st["errors"]
+        if not st["available"]:
+            title, icon, col = "Disponible en el teléfono", "cloud-off-outline", theme.MUTED
+        elif not on:
+            title, icon, col = "Sin conectar", "cloud-off-outline", theme.MUTED
+        elif st["running"]:
+            title, icon, col = "Subiendo fotos…", "cloud-sync-outline", theme.LEAF
+        elif st["errors"] and not st["pending"]:
+            title, icon, col = "Con errores", "cloud-alert-outline", theme.WARN
+        elif st["pending"]:
+            title, icon, col = f"{st['pending']} foto(s) en espera", "cloud-clock-outline", theme.WARN
+        else:
+            title, icon, col = "Todo respaldado", "cloud-check-outline", theme.LEAF
+        self.ids.drive_title.text = title
+        self.ids.drive_icon.icon = icon
+        self.ids.drive_icon.text_color = c(col)
+        parts = []
+        if on:
+            parts.append(f"{st['done']} de {total} fotos en Drive" if total else "Aún no hay fotos en la cola")
+            if st["errors"]:
+                parts.append(f"{st['errors']} con error")
+            if st["last_sync"]:
+                parts.append("última sincronización " + st["last_sync"][5:16].replace("T", " "))
+        if st["message"] and (on or not st["available"]):
+            parts.append(st["message"])
+        self.ids.drive_text.text = " · ".join(parts)
+        self.ids.drive_bar.value = 100 * st["done"] / total if on and total else 0
+        self.ids.drive_bar_box.opacity = 1 if on and total else 0
+        self.ids.drive_connect.text = ("Reconectar cuenta" if on else "Conectar Google Drive")
+        opts = self.ids.drive_opts
+        if not hasattr(self, "_drive_slot"):
+            self._drive_slot = (opts.parent, opts.parent.children.index(opts))
+        parent, index = self._drive_slot
+        if on and opts.parent is None:
+            parent.add_widget(opts, index=index)
+        elif not on and opts.parent is not None:
+            parent.remove_widget(opts)
+        self._loading = True
+        self.ids.drive_wifi.active = st["wifi_only"]
+        self._loading = False
+
+    def drive_connect(self):
+        a = app()
+        if not a.drive.available:
+            a.toast("El respaldo en Google Drive funciona en el teléfono (Android).")
+            return
+        a.toast("Elija su cuenta de Google y permita el acceso a Drive…")
+
+        def done(ok, msg):
+            Clock.schedule_once(lambda *_: (a.toast(msg), self.refresh_drive()))
+
+        a.drive.connect(done)
+
+    def drive_disconnect(self):
+        confirm("Desconectar Google Drive",
+                "Las fotos dejarán de subirse. Las que ya están en Drive y en el teléfono se conservan.",
+                [("Desconectar", lambda: (app().drive.disconnect(), self.refresh_drive()))])
+
+    def drive_wifi(self, active: bool):
+        if not self._loading:
+            app().db.set_setting("drive_wifi_only", bool(active))
+            if not active:
+                app().drive.flush_async()
+
+    def drive_sync(self):
+        a = app()
+        a.drive.retry_errors()
+        a.toast("Sincronizando con Google Drive…")
+
+    def drive_existing(self):
+        a = app()
+
+        def work():
+            n = a.drive.enqueue_existing()
+            Clock.schedule_once(lambda *_: (a.toast(f"{n} foto(s) añadidas a la cola de respaldo"
+                                                    if n else "No hay fotos anteriores pendientes"),
+                                            self.refresh_drive()))
+
+        a.workers.submit(work)
 
     def _save(self, **changes):
         a = app()

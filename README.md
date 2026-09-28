@@ -205,6 +205,29 @@ buildozer android release           # genera .aab (android.release_artifact = aa
 
 ---
 
+## 4b. Respaldo de fotos en Google Drive
+
+Cada foto nueva queda en el teléfono (carpeta «Imágenes de Fenología» para las de
+la cámara) **y** se encola para subirse a *Mi unidad › PhenoRubus · Imágenes de
+Fenología › Temporada AAAA-AAAA*. Sin señal, la cola se guarda en SQLite y se sube
+sola al volver la conexión (por defecto solo con Wi-Fi; se cambia en Ajustes).
+La app pide el permiso mínimo `drive.file`: solo ve los archivos que ella creó.
+
+Configuración única (Google exige registrar la app, gratis):
+
+1. En <https://console.cloud.google.com> cree un proyecto y habilite **Google Drive API**.
+2. *Pantalla de consentimiento OAuth*: tipo **Externo**, estado *Prueba*, y agregue su
+   correo en **Usuarios de prueba**.
+3. *Credenciales › Crear ID de cliente OAuth › Android*:
+   - Nombre del paquete: `org.rubus.fenorubus`
+   - Huella SHA-1 (clave de firma del repo `android/debug.keystore`, la usa CI):
+     `ED:B0:58:5C:E0:94:DF:75:D4:79:D5:47:C1:0C:C0:81:0E:F0:40:38`
+4. En la app: **Ajustes (engrane) › Respaldo en Google Drive › Conectar Google Drive**,
+   elija la cuenta y acepte. «Subir anteriores» respalda las fotos ya existentes.
+
+Si compila con otra clave (por ejemplo una de lanzamiento), registre también su SHA-1:
+`keytool -list -v -keystore su.keystore`.
+
 ## 5. (Opcional) Extractor MobileNetV3 con TFLite
 
 ```bash

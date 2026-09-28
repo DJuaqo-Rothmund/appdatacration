@@ -101,6 +101,11 @@ class FenoRubusApp(MDApp):
         from reporter import ReportGenerator  # Jinja2: solo al generar informes
         return ReportGenerator(self.db, data_subdir("reports"))
 
+    @cached_property
+    def drive(self):
+        from drive_backup import DriveBackup  # respaldo de fotos en Google Drive
+        return DriveBackup(self.db)
+
     def _screen(self, cls, name):
         if not self.sm.has_screen(name):
             self.sm.add_widget(cls(name=name))
@@ -145,9 +150,14 @@ class FenoRubusApp(MDApp):
         Clock.schedule_interval(lambda *_: self._check_reminder(), 60)
         # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
         Clock.schedule_once(lambda *_: self.observation, 2.5)
+        # Sube lo que haya quedado en cola (sin red la última vez).
+        if self.db.get_setting("drive_enabled", False):
+            Clock.schedule_once(lambda *_: self.drive.flush_async(), 6)
 
     def on_resume(self):
         self.week = self.db.current_week() if self.week is None else self.week
+        if "drive" in self.__dict__:
+            self.drive.flush_async()
         if self.home is not None:
             self.refresh_home()
 
@@ -286,8 +296,7 @@ class FenoRubusApp(MDApp):
 
     def backup_photo(self, photo_id: int, path: str) -> None:
         """Encola la foto para respaldo en Google Drive (si está activado)."""
-        drive = self.__dict__.get("drive")
-        if drive is None and not self.db.get_setting("drive_enabled", False):
+        if not self.db.get_setting("drive_enabled", False):
             return
         self.drive.enqueue(photo_id, path)
 

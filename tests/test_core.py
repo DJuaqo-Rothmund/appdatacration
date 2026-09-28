@@ -288,3 +288,75 @@ def test_historical_import_zip(db, tmp_path):
     regina = db.query_one("SELECT id FROM varieties WHERE name='Regina'")["id"]
     assert db.get_metrics(db.query_one("SELECT id FROM varieties WHERE name='Meeker'")["id"], 2024)["historical_yield"] == 1.6
     assert db.get_observation(regina, db.ensure_week(2024, 10)["id"])["bbch_code"] == 65
+
+
+def test_drive_backup_queue_with_fake_api(db, tmp_path):
+    import json
+    from drive_backup import DriveBackup, Offline, ROOT_FOLDER
+
+    week = db.current_week()
+    v = db.list_varieties()[0]
+    obs = db.get_or_create_observation(v["id"], week["id"])
+    paths = []
+    for i in range(2):
+        p = str(tmp_path / f"meeker_detalle_{i}.jpg")
+        synthetic_photo(55, "detail", p, i)
+        paths.append(p)
+
+    calls, folders, files = [], {}, {}
+    state = {"offline": False, "expire": True}
+
+    def transport(method, url, headers, body):
+        calls.append((method, url))
+        if state["offline"]:
+            raise Offline("sin red")
+        assert headers["Authorization"].startswith("Bearer ")
+        if state["expire"] and headers["Authorization"] == "Bearer t1":
+            state["expire"] = False
+            return 401, b'{"error": {"message": "expired"}}'
+        if method == "GET":  # búsqueda de carpeta
+            return 200, json.dumps({"files": []}).encode()
+        if "uploadType=multipart" in url:
+            assert b"image/jpeg" in body and b'"parents"' in body
+            fid = f"f{len(files)}"
+            files[fid] = body
+            return 200, json.dumps({"id": fid}).encode()
+        meta = json.loads(body)
+        fid = f"d{len(folders)}"
+        folders[fid] = meta
+        return 200, json.dumps({"id": fid}).encode()
+
+    tokens = iter(["t1", "t2", "t3"])
+
+    class Auth:
+        def get_token(self, interactive):
+            return next(tokens)
+
+    drive = DriveBackup(db, authorizer=Auth(), transport=transport, metered=lambda: False)
+    assert drive.enqueue(None, paths[0]) is not None  # desactivado: queda en cola
+    assert drive.flush() == 0 and drive.status()["pending"] == 1
+
+    db.set_setting("drive_enabled", True)
+    state["offline"] = True
+    pid = db.add_photo(obs["id"], "detail", paths[1])
+    drive.enqueue(pid, paths[1], flush=False)
+    assert drive.enqueue(pid, paths[1], flush=False) is None  # sin duplicados
+    assert drive.flush() == 0
+    st = drive.status()
+    assert st["pending"] == 2 and "conexión" in st["message"]
+
+    state["offline"] = False
+    assert drive.flush() == 2  # token vencido (401) → se renueva y sigue
+    st = drive.status()
+    assert st["done"] == 2 and st["pending"] == 0 and st["last_sync"]
+    names = [m["name"] for m in folders.values()]
+    assert ROOT_FOLDER in names and f"Temporada {week['season']}-{week['season'] + 1}" in names
+    row = db.query_one("SELECT * FROM drive_queue WHERE photo_id=?", (pid,))
+    assert row["drive_id"] in files and row["name"].endswith("meeker_detalle_1.jpg")
+
+    # Solo Wi-Fi: con datos móviles no sube.
+    drive.metered = lambda: True
+    drive.enqueue(None, paths[0], flush=False)
+    assert drive.flush() == 0 and drive.status()["message"] == "Esperando Wi-Fi"
+    # «Subir anteriores» encola las fotos de la base que falten (la de pid ya está).
+    assert drive.enqueue_existing() == 0

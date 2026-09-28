@@ -746,6 +746,76 @@
                     text: "Para respaldarlas en Google Fotos: Biblioteca › Fotos del dispositivo › «Imágenes de Fenología» › activar «Copia de seguridad»."
             PaperCard:
                 SectionLabel:
+                    text: "RESPALDO EN GOOGLE DRIVE"
+                MDBoxLayout:
+                    adaptive_height: True
+                    spacing: dp(10)
+                    MDIcon:
+                        id: drive_icon
+                        icon: "cloud-off-outline"
+                        theme_text_color: "Custom"
+                        text_color: c(theme.MUTED)
+                        size_hint: None, None
+                        size: dp(28), dp(28)
+                        pos_hint: {"center_y": .5}
+                    MDBoxLayout:
+                        orientation: "vertical"
+                        adaptive_height: True
+                        pos_hint: {"center_y": .5}
+                        Body:
+                            id: drive_title
+                            text: "Sin conectar"
+                            bold: True
+                        Muted:
+                            id: drive_text
+                MDBoxLayout:
+                    id: drive_bar_box
+                    size_hint_y: None
+                    height: dp(4)
+                    MDProgressBar:
+                        id: drive_bar
+                        value: 0
+                        color: c(theme.BERRY)
+                        back_color: c(theme.LINE)
+                PrimaryButton:
+                    id: drive_connect
+                    text: "Conectar Google Drive"
+                    on_release: root.drive_connect()
+                MDBoxLayout:
+                    id: drive_opts
+                    orientation: "vertical"
+                    adaptive_height: True
+                    spacing: dp(8)
+                    MDBoxLayout:
+                        adaptive_height: True
+                        Body:
+                            text: "Subir solo con Wi-Fi"
+                            pos_hint: {"center_y": .5}
+                        MDSwitch:
+                            id: drive_wifi
+                            thumb_color_active: c(theme.BERRY)
+                            track_color_active: c(theme.BERRY_LIGHT, .6)
+                            pos_hint: {"center_y": .5}
+                            on_active: root.drive_wifi(self.active)
+                    MDBoxLayout:
+                        adaptive_height: True
+                        spacing: dp(8)
+                        GhostButton:
+                            icon: "cloud-sync-outline"
+                            text: "Sincronizar"
+                            on_release: root.drive_sync()
+                        GhostButton:
+                            icon: "cloud-upload-outline"
+                            text: "Subir anteriores"
+                            on_release: root.drive_existing()
+                    GhostButton:
+                        icon: "link-variant-off"
+                        text: "Desconectar"
+                        on_release: root.drive_disconnect()
+                Muted:
+                    text: "Cada foto nueva queda en el teléfono y además se sube a «Mi unidad › PhenoRubus · Imágenes de Fenología», por temporada. Sin señal, se guarda en cola y se sube sola al volver la conexión."
+            PaperCard:
+                SectionLabel:
                     text: "INTELIGENCIA ARTIFICIAL (EDGE AI)"
                 Body:
                     id: ai_text

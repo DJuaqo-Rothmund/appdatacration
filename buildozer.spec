@@ -26,7 +26,7 @@ version = 1.0.0
 # - numpy y pillow tienen receta p4a; jinja2/markupsafe/pypdf/plyer son puros Python.
 # - Para usar el extractor MobileNetV3 (TFLite) agregar: tflite-runtime
 #   y copiar el modelo en assets/models/ (ver tools/export_mobilenet_tflite.py).
-requirements = python3,kivy==2.3.1,kivymd==1.2.0,pillow,numpy,jinja2,markupsafe,plyer,pyjnius,android,pypdf,sqlite3
+requirements = python3,kivy==2.3.1,kivymd==1.2.0,pillow,numpy,jinja2,markupsafe,plyer,pyjnius,android,pypdf,sqlite3,openssl,certifi
 
 # (str) Presplash / icon
 presplash.filename = %(source.dir)s/assets/presplash.png
@@ -54,7 +54,10 @@ fullscreen = 0
 # - USE_EXACT_ALARM (Android 13+): concede alarmas exactas sin ajuste manual.
 #   ¡Quitarla si la app se publicará en Google Play (política restringida a apps de alarma/calendario)!
 # - FOREGROUND_SERVICE: servicio de recordatorio.
-android.permissions = CAMERA,
+# - INTERNET / ACCESS_NETWORK_STATE: respaldo de fotos en Google Drive (solo Wi-Fi opcional).
+android.permissions = INTERNET,
+    ACCESS_NETWORK_STATE,
+    CAMERA,
     (name=android.permission.READ_EXTERNAL_STORAGE;maxSdkVersion=32),
     (name=android.permission.WRITE_EXTERNAL_STORAGE;maxSdkVersion=28),
     READ_MEDIA_IMAGES,
@@ -78,6 +81,9 @@ android.accept_sdk_license = True
 # de python-for-android (reutiliza «venv» y mezcla dos versiones de pip).
 # Para teléfonos antiguos de 32 bits, compilar aparte con: android.archs = armeabi-v7a
 android.archs = arm64-v8a
+
+# (list) Dependencias Gradle: Google Identity Services (autorización de Google Drive).
+android.gradle_dependencies = com.google.android.gms:play-services-auth:21.2.0
 
 # (bool) Enable AndroidX support
 android.enable_androidx = True
