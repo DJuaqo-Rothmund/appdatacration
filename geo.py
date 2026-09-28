@@ -148,14 +148,22 @@ class LocationRequest:
     TIMEOUT_S = 45
     MAX_AGE_S = 20   # lecturas «últimas conocidas» más viejas no sirven como punto de partida
 
-    def __init__(self, callback, error, progress=None, target: float | None = None):
+    def __init__(self, callback, error, progress=None, target: float | None = None,
+                 schedule=None):
         self.callback, self.error, self.progress = callback, error, progress
+        # Pasa del hilo de Android al hilo principal de Kivy (inyectable en las pruebas).
+        self._schedule = schedule or self._kivy_schedule
         self.target = target or self.TARGET_M
         self._refs = []
         self._best = None      # (precisión, lat, lon)
         self._done = False
         self._lm = None
         self._timer = None
+
+    @staticmethod
+    def _kivy_schedule(fn):
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda *_: fn(), 0)
 
     # ------------------------------------------------------------- lecturas
     def _offer(self, loc):
@@ -169,11 +177,10 @@ class LocationRequest:
             return
         if self._best is None or acc < self._best[0]:
             self._best = (acc, lat, lon)
-            from kivy.clock import Clock
             if self.progress:
-                Clock.schedule_once(lambda *_: self.progress(lat, lon, acc) if not self._done else None)
+                self._schedule(lambda: self.progress(lat, lon, acc) if not self._done else None)
             if acc <= self.target:
-                Clock.schedule_once(lambda *_: self.finish())
+                self._schedule(self.finish)
 
     def finish(self, *_):
         """Termina y entrega la mejor lectura (puede llamarse para «usar ya»)."""

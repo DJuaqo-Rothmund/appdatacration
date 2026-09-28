@@ -599,7 +599,6 @@ def test_import_with_coordinates(db, tmp_path):
 
 def test_gps_keeps_best_reading_and_stops_at_10m():
     import geo
-    from kivy.clock import Clock
 
     class Loc:
         def __init__(self, lat, lon, acc):
@@ -609,18 +608,24 @@ def test_gps_keeps_best_reading_and_stops_at_10m():
         def getLatitude(self): return self.lat
         def getLongitude(self): return self.lon
 
+    queue = []                              # hace de reloj de Kivy (sin Kivy en las pruebas)
+
+    def run_queue():
+        while queue:
+            queue.pop(0)()
+
     got, prog = [], []
     req = geo.LocationRequest(lambda *a: got.append(a), lambda m: got.append(("error", m)),
-                              lambda *a: prog.append(a[2]))
+                              lambda *a: prog.append(a[2]), schedule=queue.append)
     for acc in (48, 30, 35, 22):          # 35 es peor que 30: se ignora
         req._offer(Loc(-33.45, -70.66, acc))
-    Clock.tick()
+    run_queue()
     assert prog == [48, 30, 22] and not got
     req._offer(Loc(-33.4512, -70.6624, 8))  # alcanza el objetivo (±10 m) → termina solo
-    Clock.tick(); Clock.tick()
+    run_queue()
     assert got == [(-33.4512, -70.6624, 8.0)]
     req._offer(Loc(0, 0, 3))                # después de terminar no cambia nada
-    Clock.tick()
+    run_queue()
     assert len(got) == 1
 
     # «Usar ahora» o fin del tiempo: entrega la mejor lectura aunque no llegue a 10 m
