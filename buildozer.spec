@@ -55,7 +55,12 @@ fullscreen = 0
 #   ¡Quitarla si la app se publicará en Google Play (política restringida a apps de alarma/calendario)!
 # - FOREGROUND_SERVICE: servicio de recordatorio.
 # - INTERNET / ACCESS_NETWORK_STATE: respaldo de fotos en Google Drive (solo Wi-Fi opcional).
+# - ACCESS_FINE/COARSE_LOCATION: ubicación GPS opcional de cada muestra (se pide al usarla).
+# - ACCESS_MEDIA_LOCATION: leer las coordenadas GPS guardadas en las fotos de la galería.
 android.permissions = INTERNET,
+    ACCESS_FINE_LOCATION,
+    ACCESS_COARSE_LOCATION,
+    ACCESS_MEDIA_LOCATION,
     ACCESS_NETWORK_STATE,
     CAMERA,
     (name=android.permission.READ_EXTERNAL_STORAGE;maxSdkVersion=32),

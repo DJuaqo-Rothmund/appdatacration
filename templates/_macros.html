@@ -14,6 +14,12 @@
 </figure>
 {%- endmacro %}
 
+{% macro geo_line(item) -%}
+{% if item.geo %}
+<div class="small muted geo">📍 <a href="{{ item.geo.link }}" target="_blank" rel="noopener">{{ item.geo.text }}</a>{% if item.geo.acc %} · ±{{ item.geo.acc|round|int }} m{% endif %}</div>
+{% endif %}
+{%- endmacro %}
+
 {% macro ai_line(item) -%}
 {% if item.ai_code is not none %}
 <div class="ai">Sugerencia IA: <strong>BBCH {{ '%02d'|format(item.ai_code) }}</strong>

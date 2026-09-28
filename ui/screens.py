@@ -265,8 +265,7 @@ class SplashScreen(MDScreen):
 
 
 class HomeScreen(MDScreen):
-    TITLES = {"sampling": "Muestreo semanal", "varieties": "Variedades en ensayo",
-              "reports": "Informes", "preview": "Vista previa"}
+    TITLES = {"sampling": "Muestreo semanal", "reports": "Informes", "preview": "Vista previa"}
 
     def on_tab(self, name: str):
         self.ids.tabs.current = name
@@ -282,8 +281,14 @@ class HomeScreen(MDScreen):
 
 
 class SettingsScreen(MDScreen):
+    """Ajustes con dos pestañas: «General» y «Variedades»."""
+
     def on_pre_enter(self, *_):
-        self.ids.settings.refresh()
+        self.show(self.ids.pages.current or "general")
+
+    def show(self, page: str):
+        self.ids.pages.current = page
+        (self.ids.settings if page == "general" else self.ids.varieties).refresh()
 
 
 class VarietyRow(GlassButton):
@@ -373,7 +378,115 @@ class VarietyCatalogRow(GlassButton):
     tab = ObjectProperty()
 
 
-class VarietyForm(MDBoxLayout):
+def pick_number(title: str, values, current, callback):
+    """Diálogo centrado para elegir un número opcional («Sin definir» = None)."""
+    items = [("Sin definir", "No se incluye en el nombre de las fotos", lambda: callback(None))]
+    items += [(f"{title} {n}", "Seleccionado" if n == current else "", lambda n=n: callback(n))
+              for n in values]
+    pick_dialog(title, items)
+
+
+def map_dialog(start: tuple, zoom: int, on_pick):
+    """Mapa a pantalla completa con pin central. on_pick(lat, lon)."""
+    from kivy.uix.floatlayout import FloatLayout
+    from kivy.uix.modalview import ModalView
+    from kivymd.uix.button import MDIconButton
+    import geo
+    from ui.mapview import MapPicker
+
+    a = app()
+    view = ModalView(size_hint=(1, 1), auto_dismiss=True, background_color=(0, 0, 0, .6))
+    root = MDBoxLayout(orientation="vertical", md_bg_color=DIALOG_BG)
+    head = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(dp(16), dp(12)),
+                       spacing=dp(2))
+    head.add_widget(MDLabel(text="Marque la ubicación de la muestra", font_style="H6", bold=True,
+                            adaptive_height=True))
+    coords = MDLabel(text="", font_style="Caption", adaptive_height=True, theme_text_color="Custom",
+                     text_color=c(theme.MUTED))
+    head.add_widget(coords)
+    root.add_widget(head)
+
+    area = FloatLayout()
+    mp = MapPicker(start[0], start[1], zoom, workers=a.workers, size_hint=(1, 1),
+                   pos_hint={"x": 0, "y": 0})
+    area.add_widget(mp)
+    pin = MDIcon(icon="map-marker", theme_text_color="Custom", text_color=c(theme.BERRY),
+                 halign="center", valign="bottom", size_hint=(None, None), size=(dp(52), dp(52)),
+                 pos_hint={"center_x": .5, "y": .5})   # la punta del pin marca el centro
+    area.add_widget(pin)
+    Clock.schedule_once(lambda *_: setattr(pin, "font_size", dp(52)), 0)  # tras el estilo de KivyMD
+    zoom_box = MDBoxLayout(orientation="vertical", size_hint=(None, None), size=(dp(52), dp(112)),
+                           pos_hint={"right": .98, "top": .98}, spacing=dp(4))
+    for icon, step in (("plus", 1), ("minus", -1)):
+        zoom_box.add_widget(MDIconButton(icon=icon, md_bg_color=(1, 1, 1, .92),
+                                         on_release=lambda *_, s=step: mp.zoom_by(s)))
+    area.add_widget(zoom_box)
+    attribution = MDLabel(text="© OpenStreetMap", font_style="Caption", halign="right",
+                          size_hint=(None, None), size=(dp(130), dp(18)),
+                          pos_hint={"right": .99, "y": .01}, theme_text_color="Custom",
+                          text_color=(0.2, 0.2, 0.2, .9))
+    area.add_widget(attribution)
+    root.add_widget(area)
+
+    def update(*_):
+        lat, lon = mp.center_latlon
+        coords.text = f"{geo.fmt(lat, lon)} · arrastre el mapa y deje el pin sobre la planta"
+    mp.bind(cx=update, cy=update, zoom=update)
+    update()
+
+    def here(*_):
+        def done(lat, lon, acc):
+            mp.center_on(lat, lon, max(int(mp.zoom), 17))
+            a.toast(f"Centrado en su ubicación (±{acc:.0f} m)")
+
+        def granted(ok):
+            if ok:
+                Clock.schedule_once(lambda *_: geo.LocationRequest(done, a.toast).start(), 0)
+            else:
+                a.toast("Sin permiso de ubicación")
+        geo.request_location_permission(granted)
+
+    def use(*_):
+        lat, lon = mp.center_latlon
+        view.dismiss()
+        on_pick(lat, lon)
+        a.toast("Ubicación marcada en el mapa")
+
+    bar = MDBoxLayout(adaptive_height=True, padding=(dp(12), dp(10)), spacing=dp(8))
+    bar.add_widget(MDRectangleFlatButton(text="Cancelar", on_release=lambda *_: view.dismiss()))
+    bar.add_widget(MDRectangleFlatButton(text="Mi ubicación", on_release=here))
+    bar.add_widget(MDRaisedButton(text="Usar este punto", md_bg_color=c(theme.BERRY), on_release=use))
+    root.add_widget(bar)
+    view.add_widget(root)
+    view.open()
+    return view
+
+
+class SectorIrrigationMixin:
+    """Botones «Sector (1-10)» y «Equipo de riego (1-4)» de la identificación."""
+    sector = NumericProperty(0)
+    irrigation = NumericProperty(0)
+
+    def _sync_location_buttons(self):
+        self.ids.sector_btn.text = f"Sector: {self.sector or '—'}"
+        self.ids.irrigation_btn.text = f"Riego: {'ER' + str(self.irrigation) if self.irrigation else '—'}"
+        if hasattr(self, "update_photo_hint"):
+            self.update_photo_hint()
+
+    def pick_sector(self):
+        def done(n):
+            self.sector = n or 0
+            self._sync_location_buttons()
+        pick_number("Sector", ph.SECTORS, self.sector, done)
+
+    def pick_irrigation(self):
+        def done(n):
+            self.irrigation = n or 0
+            self._sync_location_buttons()
+        pick_number("Equipo de riego", ph.IRRIGATION_UNITS, self.irrigation, done)
+
+
+class VarietyForm(SectorIrrigationMixin, MDBoxLayout):
     pass
 
 
@@ -398,6 +511,10 @@ class VarietiesTab(MDScreen):
         for v in varieties:
             m = a.db.get_metrics(v["id"], season)
             parts = []
+            if v["sector"]:
+                parts.append(f"Sector {v['sector']}")
+            if v["irrigation"]:
+                parts.append(f"Riego ER{v['irrigation']}")
             if m["historical_yield"] is not None:
                 parts.append(f"hist. {m['historical_yield']:g} {m['historical_yield_unit']}")
             if m["projected_yield"] is not None:
@@ -417,7 +534,8 @@ class VarietiesTab(MDScreen):
     def add_dialog(self):
         def ok(form):
             try:
-                app().db.add_variety(form.ids.name.text, code=form.ids.code.text.strip())
+                app().db.add_variety(form.ids.name.text, code=form.ids.code.text.strip(),
+                                     sector=form.sector or None, irrigation=form.irrigation or None)
             except ValueError as exc:
                 form.ids.name.error = True
                 form.ids.name.helper_text = str(exc)
@@ -434,11 +552,13 @@ class VarietiesTab(MDScreen):
         def archive():
             a.db.delete_variety(variety_id)
             a.toast(f"«{v['name']}» archivada (historial conservado)")
+            self.refresh()
             a.refresh_home()
 
         def purge():
             a.db.delete_variety(variety_id, purge=True)
             a.toast(f"«{v['name']}» eliminada")
+            self.refresh()
             a.refresh_home()
 
         confirm(f"Quitar «{v['name']}»",
@@ -459,7 +579,7 @@ class CustomFieldForm(MDBoxLayout):
     pass
 
 
-class VarietyScreen(MDScreen):
+class VarietyScreen(SectorIrrigationMixin, MDScreen):
     variety_id = NumericProperty(0)
     METRICS = ("historical_yield", "projected_yield", "basal_canes", "laterals")
     UNITS = ("historical_yield_unit", "projected_yield_unit", "basal_canes_unit", "laterals_unit")
@@ -472,6 +592,8 @@ class VarietyScreen(MDScreen):
         self.ids.name.text = v["name"]
         self.ids.code.text = v["code"] or ""
         self.ids.notes.text = v["notes"] or ""
+        self.sector, self.irrigation = v["sector"] or 0, v["irrigation"] or 0
+        self._sync_location_buttons()
         self.ids.metrics_title.text = f"PARÁMETROS BIOMÉTRICOS · TEMPORADA {a.season}-{a.season + 1}"
         m = a.db.get_metrics(variety_id, a.season)
         for k in self.METRICS:
@@ -481,6 +603,16 @@ class VarietyScreen(MDScreen):
                 self.ids[k].text = m[k]
         self.ids.historical_note.text = m.get("historical_note") or ""
         self.load_custom()
+
+    def update_photo_hint(self):
+        if "photo_hint" not in self.ids:
+            return
+        v = {"name": self.ids.name.text, "code": self.ids.code.text,
+             "sector": self.sector, "irrigation": self.irrigation}
+        a = app()
+        g = ph.photo_basename(v, a.week["start_date"], "canopy")
+        d = ph.photo_basename(v, a.week["start_date"], "detail")
+        self.ids.photo_hint.text = f"Nombre de las fotos: {g}.jpg (general) · {d}.jpg (detalle)"
 
     def load_custom(self):
         a = app()
@@ -511,7 +643,8 @@ class VarietyScreen(MDScreen):
             return
         try:
             a.db.update_variety(self.variety_id, name=name, code=self.ids.code.text.strip(),
-                                notes=self.ids.notes.text)
+                                notes=self.ids.notes.text, sector=self.sector or None,
+                                irrigation=self.irrigation or None)
         except Exception:
             a.toast("Ya existe otra variedad con ese nombre.")
             return
@@ -629,6 +762,85 @@ class ObservationScreen(MDScreen):
                                if self.obs["bbch_code"] is not None else "Registro nuevo")
         self.suggestion = None
         self._show_ai_from_obs()
+        self.refresh_location()
+
+    # ------------------------------------------------ ubicación (opcional)
+    GPS_SOURCES = {"gps": "GPS del teléfono", "foto": "desde la foto", "mapa": "marcada en el mapa"}
+
+    def refresh_location(self):
+        o = self.obs
+        has = o["latitude"] is not None and o["longitude"] is not None
+        self.ids.gps_icon.icon = "map-marker-check" if has else "map-marker-off-outline"
+        self.ids.gps_icon.text_color = c(theme.BERRY if has else theme.MUTED)
+        if has:
+            import geo
+            self.ids.gps_text.text = geo.fmt(o["latitude"], o["longitude"])
+            parts = [self.GPS_SOURCES.get(o["gps_source"] or "", o["gps_source"] or "")]
+            if o["gps_accuracy"]:
+                parts.append(f"precisión ±{o['gps_accuracy']:.0f} m")
+            self.ids.gps_detail.text = " · ".join(p for p in parts if p)
+        else:
+            self.ids.gps_text.text = "Sin ubicación"
+            self.ids.gps_detail.text = ("Opcional: tome la posición actual, márquela en el mapa o "
+                                        "se completa sola si la foto trae GPS.")
+        self.ids.gps_clear.opacity = 1 if has else 0
+        self.ids.gps_clear.disabled = not has
+
+    def set_location(self, lat, lon, accuracy=None, source="gps"):
+        a = app()
+        a.db.update_observation(self.obs["id"], latitude=lat, longitude=lon,
+                                gps_accuracy=accuracy, gps_source=source)
+        a.db.set_setting("last_location", [lat, lon])
+        self.obs = a.db.get_observation(self.variety_id, self.week_id)
+        self.refresh_location()
+
+    def clear_location(self):
+        self.set_location(None, None, None, None)
+
+    def locate_gps(self):
+        a = app()
+        import geo
+
+        def granted(ok):
+            if not ok:
+                a.toast("Sin permiso de ubicación: puede marcar el punto en el mapa.")
+                return
+            Clock.schedule_once(lambda *_: start(), 0)
+
+        def start():
+            self.ids.gps_btn.disabled = True
+            self.ids.gps_text.text = "Buscando señal GPS…"
+            self.ids.gps_detail.text = "Puede tardar unos segundos (mejor al aire libre)."
+
+            def done(lat, lon, acc):
+                self.ids.gps_btn.disabled = False
+                self.set_location(lat, lon, acc, "gps")
+                a.toast(f"Ubicación guardada (±{acc:.0f} m)")
+
+            def fail(msg):
+                self.ids.gps_btn.disabled = False
+                self.refresh_location()
+                a.toast(msg)
+
+            try:
+                self._gps = geo.LocationRequest(done, fail)
+                self._gps.start()
+            except Exception as exc:  # noqa: BLE001
+                fail(f"No se pudo leer el GPS: {exc}")
+
+        geo.request_location_permission(granted)
+
+    def pick_on_map(self):
+        a = app()
+        o = self.obs
+        if o["latitude"] is not None:
+            start, zoom = (o["latitude"], o["longitude"]), 18
+        elif a.db.get_setting("last_location"):
+            start, zoom = tuple(a.db.get_setting("last_location")), 17
+        else:
+            import geo
+            start, zoom = geo.DEFAULT_CENTER, 6
+        map_dialog(start, zoom, lambda lat, lon: self.set_location(lat, lon, None, "mapa"))
 
     def _show_ai_from_obs(self):
         o = self.obs
@@ -690,6 +902,13 @@ class ObservationScreen(MDScreen):
                     dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
                     base = ph.photo_basename(self.variety, self.week["start_date"], kind)
                     for tmp in paths:
+                        if self.obs["latitude"] is None:
+                            import geo
+                            gps = geo.exif_gps(tmp)
+                            if gps:
+                                Clock.schedule_once(lambda *_, g=gps: (
+                                    self.set_location(g[0], g[1], None, "foto"),
+                                    a.toast("Ubicación tomada de la foto")))
                         path = store_photo(tmp, dest_dir, base, exact=True)
                         pid = a.db.add_photo(obs_id, kind, path, source=origin)
                         a.thumb(path, 640)

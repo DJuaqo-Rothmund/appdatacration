@@ -242,13 +242,15 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
     items = []
     rows = db.query(
         "SELECT p.id, p.path, p.kind, p.source, p.captured_at, v.name AS variety, v.code AS vcode, "
+        "v.sector AS vsector, v.irrigation AS virrigation, "
         "w.week_number, w.season, w.start_date "
         "FROM photos p JOIN observations o ON o.id = p.observation_id "
         "JOIN varieties v ON v.id = o.variety_id JOIN sampling_weeks w ON w.id = o.week_id "
         "ORDER BY p.id")
 
     def base_name(r):
-        return ph.photo_basename({"name": r["variety"], "code": r["vcode"]}, r["start_date"], r["kind"])
+        return ph.photo_basename({"name": r["variety"], "code": r["vcode"], "sector": r["vsector"],
+                                  "irrigation": r["virrigation"]}, r["start_date"], r["kind"])
 
     def link(r, src):
         used.add(src)

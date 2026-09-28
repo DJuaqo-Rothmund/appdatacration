@@ -26,6 +26,13 @@ varietales de frambueso**, pensada para trabajar en terreno **sin conexión** (o
   semana de muestreo, la abreviatura de la variedad (su campo «Código / abreviatura») y
   G = general (canopia) o D = detalle; p. ej. `28092026-C11G.jpg`, `21092026-MeeD.jpg`.
   Las fotos adicionales del mismo registro llevan `-2`, `-3`…
+  Si la variedad tiene **sector** (1-10) y/o **equipo de riego** (1-4), se agregan tras el
+  código: `28092026-C11S1ER2G` (sector 1, equipo de riego 2, foto general).
+* **Variedades** se administran en *Ajustes (engrane) › Variedades*.
+* **Ubicación de la muestra (opcional):** en cada registro, «Mi ubicación» (GPS del teléfono),
+  «Marcar en mapa» (OpenStreetMap, pin central; las zonas vistas quedan en caché para usarse
+  sin conexión) o automática si la foto trae coordenadas GPS. Aparece en los informes con
+  enlace al mapa y se puede importar con las columnas `latitud`/`longitud`.
 * **Optimizada para gama media/baja:** tarjetas livianas (sin MDCard), pantallas y módulos
   pesados (numpy, IA, Jinja2) cargados bajo demanda, fotos y miniaturas en segundo plano,
   sin MSAA, SQLite en WAL/NORMAL.

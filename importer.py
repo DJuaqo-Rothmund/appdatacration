@@ -8,7 +8,7 @@ fotos. Columnas (sin importar mayúsculas ni tildes; solo «variedad» y «fecha
 o «semana» son obligatorias):
 
     temporada, fecha, semana, variedad, bbch, foto_canopia, foto_detalle, notas,
-    rendimiento_historico, unidad_rendimiento, canas_basales, laterales
+    rendimiento_historico, unidad_rendimiento, canas_basales, laterales, latitud, longitud
 
 * temporada: 2023 o «2023-2024» (si falta, se deduce de la fecha).
 * fecha: AAAA-MM-DD o DD-MM-AAAA (se asigna a su semana de muestreo).
@@ -35,14 +35,15 @@ from platform_utils import data_subdir
 
 TEMPLATE_HEADER = ["temporada", "fecha", "semana", "variedad", "bbch", "foto_canopia",
                    "foto_detalle", "notas", "rendimiento_historico", "unidad_rendimiento",
-                   "canas_basales", "laterales"]
+                   "canas_basales", "laterales", "latitud", "longitud"]
 TEMPLATE_ROWS = [
     ["2024", "2024-10-18", "", "Meeker", "57", "meeker_s07_canopia.jpg",
-     "meeker_s07_detalle.jpg", "Botones con sépalos abiertos", "1.6", "kg/planta", "7", "18"],
+     "meeker_s07_detalle.jpg", "Botones con sépalos abiertos", "1.6", "kg/planta", "7", "18",
+     "-33.451230", "-70.662410"],
     ["2024", "", "10", "Regina", "BBCH 65", "", "regina_s10_detalle.jpg|regina_s10_detalle2.jpg",
-     "Plena floración", "", "", "", ""],
+     "Plena floración", "", "", "", "", "", ""],
     ["2023-2024", "12-12-2023", "", "Código 11", "81", "", "", "Primeros frutos rosados", "",
-     "", "", ""],
+     "", "", "", "", ""],
 ]
 
 
@@ -56,7 +57,9 @@ ALIASES = {"ano": "temporada", "season": "temporada", "fecha_muestreo": "fecha",
            "semana_muestreo": "semana", "week": "semana", "variety": "variedad", "cultivar": "variedad",
            "estado": "bbch", "estado_bbch": "bbch", "foto_general": "foto_canopia",
            "foto_planta": "foto_canopia", "foto_macro": "foto_detalle", "observaciones": "notas",
-           "comentarios": "notas", "canas": "canas_basales", "rendimiento": "rendimiento_historico"}
+           "comentarios": "notas", "canas": "canas_basales", "rendimiento": "rendimiento_historico",
+           "lat": "latitud", "latitude": "latitud", "lon": "longitud", "lng": "longitud",
+           "longitude": "longitud"}
 
 
 @dataclass
@@ -179,6 +182,9 @@ def import_file(db, path: str, classifier=None, train_ai: bool = True, progress=
             fields["notes"] = r["notas"]
         if date:
             fields["observed_at"] = date.isoformat()
+        lat, lon = _num(r.get("latitud", "")), _num(r.get("longitud", ""))
+        if lat is not None and lon is not None and -90 <= lat <= 90 and -180 <= lon <= 180:
+            fields.update(latitude=lat, longitude=lon, gps_source="histórico")
         if fields:
             db.update_observation(obs["id"], **fields)
         res.observations += 1

@@ -240,7 +240,8 @@ def expected_bbch_for_week(week_number: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Nombre de archivo de las fotos: «ddmmaaaa-<Variedad><G|D>», p. ej. 28092026-C11G
+# Nombre de archivo de las fotos: «ddmmaaaa-<Variedad>[S<sector>][ER<riego>]<G|D>»,
+# p. ej. 28092026-C11G o 28092026-C11S1ER2G
 # (fecha = inicio de la semana de muestreo; G = general/canopia, D = detalle).
 # ---------------------------------------------------------------------------
 PHOTO_KIND_LETTER = {"canopy": "G", "detail": "D"}
@@ -265,10 +266,24 @@ def variety_tag(name: str, code: str | None = None) -> str:
     return tag or "Var"
 
 
+SECTORS = range(1, 11)          # sector del ensayo (opcional)
+IRRIGATION_UNITS = range(1, 5)  # equipo de riego (opcional)
+
+
+def location_tag(variety: dict) -> str:
+    """«S1ER2» (sector 1, equipo de riego 2); se omite lo que no esté definido."""
+    out = ""
+    if variety.get("sector"):
+        out += f"S{int(variety['sector'])}"
+    if variety.get("irrigation"):
+        out += f"ER{int(variety['irrigation'])}"
+    return out
+
+
 def photo_basename(variety: dict, week_start, kind: str, seq: int = 1) -> str:
     import datetime as _d
     if isinstance(week_start, str):
         week_start = _d.date.fromisoformat(week_start[:10])
     base = f"{week_start:%d%m%Y}-{variety_tag(variety.get('name', ''), variety.get('code'))}" \
-           f"{PHOTO_KIND_LETTER.get(kind, 'X')}"
+           f"{location_tag(variety)}{PHOTO_KIND_LETTER.get(kind, 'X')}"
     return base if seq <= 1 else f"{base}-{seq}"

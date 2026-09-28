@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import bbch_chip, photo, ai_line %}
+{% from "_macros.html" import geo_line, bbch_chip, photo, ai_line %}
 {% block meta %}<span>{{ stats.done }}/{{ stats.varieties }} variedades con estado BBCH</span><span>{{ stats.photos }} fotos</span>{% endblock %}
 {% block content %}
 <h2>Resumen inter-varietal</h2>
@@ -36,6 +36,7 @@
     {% if c.extras %}<div class="extras">{% for src in c.extras %}<img src="{{ src }}" alt="Foto adicional" loading="lazy">{% endfor %}</div>{% endif %}
     <div>{{ bbch_chip(c.code) }}</div>
     {{ ai_line(c) }}
+    {{ geo_line(c) }}
     {% if c.notes %}<div class="notes">{{ c.notes }}</div>{% endif %}
   </article>
 {% endfor %}

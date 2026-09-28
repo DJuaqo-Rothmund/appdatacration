@@ -28,7 +28,7 @@ from typing import Any, Iterable
 
 import phenology as ph
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 DEFAULT_VARIETIES: list[tuple[str, str]] = [
     ("Código 11", "C11"),
@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS varieties (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
     code        TEXT,
+    sector      INTEGER,              -- opcional (1-10)
+    irrigation  INTEGER,              -- equipo de riego, opcional (1-4)
     notes       TEXT DEFAULT '',
     active      INTEGER NOT NULL DEFAULT 1,
     sort_order  INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +113,10 @@ CREATE TABLE IF NOT EXISTS observations (
     ai_accepted    INTEGER,
     notes          TEXT DEFAULT '',
     observed_at    TEXT,
+    latitude       REAL,              -- ubicación de la muestra (opcional)
+    longitude      REAL,
+    gps_accuracy   REAL,              -- metros
+    gps_source     TEXT,              -- gps | foto | mapa
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     UNIQUE (variety_id, week_id)
@@ -248,10 +254,25 @@ class Database:
         with self._lock:
             self._migrate_photos_v2()
             self.conn.executescript(SCHEMA)
+            self._add_missing_columns()
             self.conn.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),))
             self.conn.commit()
+
+    NEW_COLUMNS = {  # v3: columnas opcionales agregadas a tablas existentes
+        "varieties": [("sector", "INTEGER"), ("irrigation", "INTEGER")],
+        "observations": [("latitude", "REAL"), ("longitude", "REAL"),
+                         ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
+    }
+
+    def _add_missing_columns(self) -> None:
+        for table, cols in self.NEW_COLUMNS.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, typ in cols:
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+        self.conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
 
     def _migrate_photos_v2(self) -> None:
         """
@@ -333,7 +354,8 @@ class Database:
         return self.query_one("SELECT * FROM varieties WHERE id=?", (variety_id,))
 
     def add_variety(self, name: str, code: str | None = None, notes: str = "",
-                    sort_order: int | None = None, log: bool = True) -> int:
+                    sort_order: int | None = None, log: bool = True,
+                    sector: int | None = None, irrigation: int | None = None) -> int:
         name = name.strip()
         if not name:
             raise ValueError("El nombre de la variedad no puede estar vacío.")
@@ -349,14 +371,15 @@ class Database:
             row = self.query_one("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM varieties")
             sort_order = row["n"]
         cur = self.execute(
-            "INSERT INTO varieties(name, code, notes, sort_order, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?)", (name, code or "", notes, sort_order, _now(), _now()))
+            "INSERT INTO varieties(name, code, notes, sort_order, sector, irrigation, created_at, "
+            "updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (name, code or "", notes, sort_order, sector, irrigation, _now(), _now()))
         if log:
             self.log("create", "variety", cur.lastrowid, name)
         return cur.lastrowid
 
     def update_variety(self, variety_id: int, **fields: Any) -> None:
-        allowed = {"name", "code", "notes", "sort_order", "active"}
+        allowed = {"name", "code", "notes", "sort_order", "active", "sector", "irrigation"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
@@ -518,7 +541,8 @@ class Database:
 
     def update_observation(self, observation_id: int, **fields: Any) -> None:
         allowed = {"bbch_code", "bbch_label", "ai_code", "ai_confidence", "ai_detail",
-                   "ai_accepted", "notes", "observed_at"}
+                   "ai_accepted", "notes", "observed_at", "latitude", "longitude",
+                   "gps_accuracy", "gps_source"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

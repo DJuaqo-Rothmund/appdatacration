@@ -95,6 +95,8 @@ def request_runtime_permissions(callback: Callable[[bool], None] | None = None) 
     from android.permissions import request_permissions  # type: ignore
     api = android_api_level()
     perms = ["android.permission.CAMERA"]
+    if api >= 29:  # coordenadas GPS de las fotos (EXIF) elegidas de la galería
+        perms += ["android.permission.ACCESS_MEDIA_LOCATION"]
     if api >= 33:
         perms += ["android.permission.READ_MEDIA_IMAGES",
                   "android.permission.POST_NOTIFICATIONS"]
@@ -143,7 +145,15 @@ class AndroidMedia:
     def _copy_uri_to_file(self, uri, dest: str) -> str:
         from jnius import autoclass  # type: ignore
         FileOutputStream = autoclass("java.io.FileOutputStream")
-        ins = self.resolver.openInputStream(uri)
+        if self.api >= 29 and uri.getAuthority() == "media":
+            try:  # sin esto Android borra la ubicación (EXIF GPS) de fotos ajenas
+                uri = self.MediaStore.setRequireOriginal(uri)
+            except Exception:  # noqa: BLE001 (sin permiso ACCESS_MEDIA_LOCATION)
+                pass
+        try:
+            ins = self.resolver.openInputStream(uri)
+        except Exception:  # noqa: BLE001 (setRequireOriginal sin permiso: abrir la normal)
+            ins = self.resolver.openInputStream(uri.buildUpon().clearQuery().build())
         try:
             if self.api >= 29:
                 out = FileOutputStream(dest)
@@ -220,18 +230,35 @@ class AndroidMedia:
         self._pending[RC_GALLERY] = (callback, None)
         self.activity.startActivityForResult(intent, RC_GALLERY)
 
-    def pick_images(self, callback: Callable[[list, str], None]) -> None:
-        """Selección múltiple (hasta 10). callback(lista_de_rutas, "gallery")."""
-        if self.api >= 33:
+    def pick_images(self, callback: Callable[[list, str], None], fallback: bool = False) -> None:
+        """Selección múltiple (hasta 10). callback(lista_de_rutas, "gallery").
+
+        Android 13+: selector de fotos del sistema. EXTRA_PICK_IMAGES_MAX debe llegar
+        como int de Java: con un entero de Python pyjnius puede elegir otra sobrecarga
+        (long) y el selector se cierra al instante sin mostrar nada. Por eso se pasa un
+        java.lang.Integer y, si aun así se cierra solo en < 2 s, se reintenta con el
+        selector de archivos clásico (ACTION_GET_CONTENT).
+        """
+        from jnius import autoclass  # type: ignore
+        import time
+        if self.api >= 33 and not fallback:
             intent = self.Intent(self.MediaStore.ACTION_PICK_IMAGES)
-            intent.putExtra(self.MediaStore.EXTRA_PICK_IMAGES_MAX, MAX_MULTI)
+            intent.putExtra(self.MediaStore.EXTRA_PICK_IMAGES_MAX,
+                            autoclass("java.lang.Integer")(MAX_MULTI))
         else:
             intent = self.Intent(self.Intent.ACTION_GET_CONTENT)
             intent.addCategory(self.Intent.CATEGORY_OPENABLE)
             intent.putExtra(self.Intent.EXTRA_ALLOW_MULTIPLE, True)
         intent.setType("image/*")
         self._pending[RC_GALLERY_MULTI] = (callback, None)
-        self.activity.startActivityForResult(intent, RC_GALLERY_MULTI)
+        self._multi_launch = (time.monotonic(), fallback)
+        try:
+            self.activity.startActivityForResult(intent, RC_GALLERY_MULTI)
+        except Exception:  # noqa: BLE001 (sin selector de fotos: usar el clásico)
+            if fallback:
+                raise
+            self._pending.pop(RC_GALLERY_MULTI, None)
+            self.pick_images(callback, fallback=True)
 
     def pick_document(self, callback: Callable[[str | None, str], None], exts=None) -> None:
         intent = self.Intent(self.Intent.ACTION_OPEN_DOCUMENT)
@@ -245,6 +272,13 @@ class AndroidMedia:
             return
         callback, uri = self._pending.pop(request_code)
         ok = result_code == self.Activity.RESULT_OK
+        if request_code == RC_GALLERY_MULTI and not ok:
+            import time
+            started, was_fallback = getattr(self, "_multi_launch", (0, True))
+            if not was_fallback and time.monotonic() - started < 2.0:
+                # El selector de fotos se cerró solo: abrir el selector clásico.
+                self.pick_images(callback, fallback=True)
+                return
         # La copia del archivo (varios MB) se hace fuera del hilo de la interfaz.
         threading.Thread(target=self._handle_result, daemon=True,
                          args=(request_code, ok, intent, callback, uri)).start()

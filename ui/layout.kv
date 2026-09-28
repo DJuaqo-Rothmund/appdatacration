@@ -270,10 +270,6 @@
                 SamplingTab:
                     id: sampling
             Screen:
-                name: "varieties"
-                VarietiesTab:
-                    id: varieties
-            Screen:
                 name: "reports"
                 ReportsTab:
                     id: reports
@@ -288,12 +284,6 @@
                 text: "Muestreo"
                 active: tabs.current == "sampling"
                 on_release: root.on_tab("sampling")
-            NavTile:
-                id: nav_varieties
-                name: "varieties"
-                text: "Variedades"
-                active: tabs.current == "varieties"
-                on_release: root.on_tab("varieties")
             NavTile:
                 id: nav_reports
                 name: "reports"
@@ -314,8 +304,30 @@
         TopBar:
             title: "Ajustes"
             left_action_items: [["arrow-left", lambda x: app.back()]]
-        SettingsTab:
-            id: settings
+        MDBoxLayout:
+            size_hint_y: None
+            height: dp(52)
+            padding: dp(16), dp(6), dp(16), dp(4)
+            spacing: dp(8)
+            SegButton:
+                text: "General"
+                selected: pages.current == "general"
+                on_release: root.show("general")
+            SegButton:
+                text: "Variedades"
+                selected: pages.current == "varieties"
+                on_release: root.show("varieties")
+        ScreenManager:
+            id: pages
+            transition: NoTransition()
+            Screen:
+                name: "general"
+                SettingsTab:
+                    id: settings
+            Screen:
+                name: "varieties"
+                VarietiesTab:
+                    id: varieties
 
 <SamplingTab>:
     orientation: "vertical"
@@ -1257,6 +1269,47 @@
                         max_height: dp(180)
                     Muted:
                         id: stamp
+                PaperCard:
+                    SectionLabel:
+                        text: "UBICACIÓN DE LA MUESTRA (OPCIONAL)"
+                    MDBoxLayout:
+                        adaptive_height: True
+                        spacing: dp(10)
+                        MDIcon:
+                            id: gps_icon
+                            icon: "map-marker-off-outline"
+                            theme_text_color: "Custom"
+                            text_color: c(theme.MUTED)
+                            size_hint: None, None
+                            size: dp(28), dp(28)
+                            pos_hint: {"center_y": .5}
+                        MDBoxLayout:
+                            orientation: "vertical"
+                            adaptive_height: True
+                            pos_hint: {"center_y": .5}
+                            Body:
+                                id: gps_text
+                                text: "Sin ubicación"
+                                bold: True
+                            Muted:
+                                id: gps_detail
+                    MDBoxLayout:
+                        adaptive_height: True
+                        spacing: dp(8)
+                        GhostButton:
+                            id: gps_btn
+                            icon: "crosshairs-gps"
+                            text: "Mi ubicación"
+                            on_release: root.locate_gps()
+                        GhostButton:
+                            icon: "map-marker-plus-outline"
+                            text: "Marcar en mapa"
+                            on_release: root.pick_on_map()
+                    GhostButton:
+                        id: gps_clear
+                        icon: "map-marker-remove-outline"
+                        text: "Quitar ubicación"
+                        on_release: root.clear_location()
                 PrimaryButton:
                     text: "Guardar registro"
                     on_release: root.save()
@@ -1301,6 +1354,22 @@
                     Field:
                         id: code
                         hint_text: "Código / abreviatura (nombre de las fotos)"
+                        on_text: root.update_photo_hint()
+                    MDBoxLayout:
+                        adaptive_height: True
+                        spacing: dp(8)
+                        GhostButton:
+                            id: sector_btn
+                            icon: "map-marker-radius-outline"
+                            text: "Sector: —"
+                            on_release: root.pick_sector()
+                        GhostButton:
+                            id: irrigation_btn
+                            icon: "water-pump"
+                            text: "Riego: —"
+                            on_release: root.pick_irrigation()
+                    Muted:
+                        id: photo_hint
                     Field:
                         id: notes
                         hint_text: "Notas (origen, manejo, parcela...)"
@@ -1427,6 +1496,19 @@
     Field:
         id: code
         hint_text: "Código (opcional)"
+    MDBoxLayout:
+        adaptive_height: True
+        spacing: dp(8)
+        GhostButton:
+            id: sector_btn
+            icon: "map-marker-radius-outline"
+            text: "Sector: —"
+            on_release: root.pick_sector()
+        GhostButton:
+            id: irrigation_btn
+            icon: "water-pump"
+            text: "Riego: —"
+            on_release: root.pick_irrigation()
 
 <PinForm>:
     orientation: "vertical"

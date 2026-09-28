@@ -331,10 +331,16 @@ class ReportGenerator:
     def _obs_ctx(self, obs: dict | None) -> dict:
         if not obs:
             return {"code": None, "notes": "", "ai_code": None, "ai_conf": None,
-                    "ai_accepted": None, "observed_at": None}
+                    "ai_accepted": None, "observed_at": None, "geo": None}
+        geo_ = None
+        if obs.get("latitude") is not None and obs.get("longitude") is not None:
+            import geo
+            geo_ = {"text": geo.fmt(obs["latitude"], obs["longitude"]),
+                    "link": geo.osm_link(obs["latitude"], obs["longitude"]),
+                    "acc": obs.get("gps_accuracy"), "source": obs.get("gps_source") or ""}
         return {"code": obs["bbch_code"], "notes": obs["notes"] or "",
                 "ai_code": obs["ai_code"], "ai_conf": obs["ai_confidence"],
-                "ai_accepted": obs["ai_accepted"], "observed_at": obs["observed_at"]}
+                "ai_accepted": obs["ai_accepted"], "observed_at": obs["observed_at"], "geo": geo_}
 
     def _compare(self, heat: list[dict], weeks: list[dict], selected: list[int] | None = None):
         if len(weeks) < 2:

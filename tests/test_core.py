@@ -534,3 +534,64 @@ def test_drive_connect_errors_are_explained_and_logged(db):
     log = drive.diagnostics()
     assert "✗" in log[0] and "SHA-1" in log[0] and "Conectando" in log[-1]
     assert drive.status()["enabled"] is False and "SHA-1" in drive.status()["message"]
+
+
+def test_v3_sector_irrigation_gps_and_names(db, tmp_path):
+    import sqlite3
+    import geo
+    # Base v2 sin columnas nuevas → se agregan sin perder datos.
+    old = tmp_path / "v2.sqlite3"
+    d = Database(str(old))
+    vid = d.list_varieties()[0]["id"]
+    d.close()
+    con = sqlite3.connect(old)
+    con.executescript("""
+        CREATE TABLE v2 AS SELECT id, name, code, notes, active, sort_order, created_at, updated_at FROM varieties;
+        PRAGMA foreign_keys=OFF;
+        DROP TABLE varieties; ALTER TABLE v2 RENAME TO varieties;""")
+    con.close()
+    d = Database(str(old))
+    cols = {r[1] for r in d.conn.execute("PRAGMA table_info(varieties)")}
+    assert {"sector", "irrigation"} <= cols
+    d.update_variety(vid, sector=1, irrigation=2)
+    v = d.get_variety(vid)
+    assert ph.photo_basename(v, "2026-09-28", "canopy") == f"28092026-{ph.variety_tag(v['name'], v['code'])}S1ER2G"
+    d.close()
+
+    # Solo equipo de riego / sin nada
+    assert ph.photo_basename({"name": "Meeker", "code": "MEE", "irrigation": 3}, "2026-09-21", "detail") == "21092026-MeeER3D"
+    new_id = db.add_variety("Tulameen", code="TUL", sector=10, irrigation=4)
+    assert ph.location_tag(db.get_variety(new_id)) == "S10ER4"
+
+    # GPS: EXIF de una foto y guardado en el registro
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), (40, 120, 40))
+    exif = Image.Exif()
+    exif[0x8825] = {1: "S", 2: (33.0, 27.0, 4.428), 3: "W", 4: (70.0, 39.0, 44.676)}
+    p = str(tmp_path / "gps.jpg")
+    img.save(p, exif=exif)
+    lat, lon = geo.exif_gps(p)
+    assert abs(lat + 33.45123) < 1e-5 and abs(lon + 70.66241) < 1e-5
+    assert geo.exif_gps(synthetic_photo(55, "detail", str(tmp_path / "n.jpg"), 0)) is None
+
+    week = db.current_week()
+    obs = db.get_or_create_observation(new_id, week["id"])
+    db.update_observation(obs["id"], latitude=lat, longitude=lon, gps_accuracy=6.0, gps_source="gps")
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    html = open(rep.weekly(week["id"]).path, encoding="utf-8").read()
+    assert "-33.451230, -70.662410" in html and "openstreetmap.org/?mlat=-33.451230" in html
+
+    # Matemática de teselas: ida y vuelta
+    x, y = geo.latlon_to_tile(lat, lon, 17)
+    lat2, lon2 = geo.tile_to_latlon(x, y, 17)
+    assert abs(lat2 - lat) < 1e-9 and abs(lon2 - lon) < 1e-9
+
+
+def test_import_with_coordinates(db, tmp_path):
+    from importer import import_file, write_template
+    path = write_template(str(tmp_path / "plantilla.csv"))
+    import_file(db, path, train_ai=False)
+    v = next(x for x in db.list_varieties() if x["name"] == "Meeker")
+    rows = db.query("SELECT latitude, longitude, gps_source FROM observations WHERE variety_id=? "
+                    "AND latitude IS NOT NULL", (v["id"],))
+    assert rows and abs(rows[0]["latitude"] + 33.45123) < 1e-6 and rows[0]["gps_source"] == "histórico"
