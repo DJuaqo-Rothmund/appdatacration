@@ -221,44 +221,36 @@ class AndroidMedia:
 
     # ---------------------------------------------------------- galería
     def pick_image(self, callback: PhotoCallback) -> None:
-        if self.api >= 33:
-            intent = self.Intent(self.MediaStore.ACTION_PICK_IMAGES)
-        else:
+        try:
             intent = self.Intent(self.Intent.ACTION_GET_CONTENT)
             intent.addCategory(self.Intent.CATEGORY_OPENABLE)
-        intent.setType("image/*")
-        self._pending[RC_GALLERY] = (callback, None)
-        self.activity.startActivityForResult(intent, RC_GALLERY)
+            intent.setType("image/*")
+            self._pending[RC_GALLERY] = (callback, None)
+            self.activity.startActivityForResult(intent, RC_GALLERY)
+        except Exception as exc:  # noqa: BLE001
+            print("pick_image error:", exc)
+            self._pending.pop(RC_GALLERY, None)
+            callback(None, "error")
 
-    def pick_images(self, callback: Callable[[list, str], None], fallback: bool = False) -> None:
+    def pick_images(self, callback: Callable[[list, str], None]) -> None:
         """Selección múltiple (hasta 10). callback(lista_de_rutas, "gallery").
 
-        Android 13+: selector de fotos del sistema. EXTRA_PICK_IMAGES_MAX debe llegar
-        como int de Java: con un entero de Python pyjnius puede elegir otra sobrecarga
-        (long) y el selector se cierra al instante sin mostrar nada. Por eso se pasa un
-        java.lang.Integer y, si aun así se cierra solo en < 2 s, se reintenta con el
-        selector de archivos clásico (ACTION_GET_CONTENT).
+        Se usa ACTION_GET_CONTENT + EXTRA_ALLOW_MULTIPLE (booleano): funciona en todas
+        las versiones y en Android 13+ abre igualmente el selector de fotos del sistema.
+        No se usa EXTRA_PICK_IMAGES_MAX: exige un int de Java y pyjnius no garantiza esa
+        sobrecarga de putExtra (en 1.1.16/1.1.17 cerraba el selector o la app).
         """
-        from jnius import autoclass  # type: ignore
-        import time
-        if self.api >= 33 and not fallback:
-            intent = self.Intent(self.MediaStore.ACTION_PICK_IMAGES)
-            intent.putExtra(self.MediaStore.EXTRA_PICK_IMAGES_MAX,
-                            autoclass("java.lang.Integer")(MAX_MULTI))
-        else:
+        try:
             intent = self.Intent(self.Intent.ACTION_GET_CONTENT)
             intent.addCategory(self.Intent.CATEGORY_OPENABLE)
+            intent.setType("image/*")
             intent.putExtra(self.Intent.EXTRA_ALLOW_MULTIPLE, True)
-        intent.setType("image/*")
-        self._pending[RC_GALLERY_MULTI] = (callback, None)
-        self._multi_launch = (time.monotonic(), fallback)
-        try:
+            self._pending[RC_GALLERY_MULTI] = (callback, None)
             self.activity.startActivityForResult(intent, RC_GALLERY_MULTI)
-        except Exception:  # noqa: BLE001 (sin selector de fotos: usar el clásico)
-            if fallback:
-                raise
+        except Exception as exc:  # noqa: BLE001 (nunca cerrar la app por el selector)
+            print("pick_images error:", exc)
             self._pending.pop(RC_GALLERY_MULTI, None)
-            self.pick_images(callback, fallback=True)
+            callback([], "error")
 
     def pick_document(self, callback: Callable[[str | None, str], None], exts=None) -> None:
         intent = self.Intent(self.Intent.ACTION_OPEN_DOCUMENT)
@@ -272,13 +264,6 @@ class AndroidMedia:
             return
         callback, uri = self._pending.pop(request_code)
         ok = result_code == self.Activity.RESULT_OK
-        if request_code == RC_GALLERY_MULTI and not ok:
-            import time
-            started, was_fallback = getattr(self, "_multi_launch", (0, True))
-            if not was_fallback and time.monotonic() - started < 2.0:
-                # El selector de fotos se cerró solo: abrir el selector clásico.
-                self.pick_images(callback, fallback=True)
-                return
         # La copia del archivo (varios MB) se hace fuera del hilo de la interfaz.
         threading.Thread(target=self._handle_result, daemon=True,
                          args=(request_code, ok, intent, callback, uri)).start()

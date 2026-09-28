@@ -183,6 +183,30 @@ def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outli
     return box
 
 
+def text_dialog(title: str, lines: list[str], highlight: str = "", actions=(), small=False):
+    """Diálogo con texto largo que se ajusta (diagnósticos, errores)."""
+    from kivymd.uix.scrollview import MDScrollView
+    box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                      padding=(0, 0, 0, dp(8)))
+    for text in lines:
+        box.add_widget(MDLabel(text=text, font_style="Caption" if small else "Body2",
+                               adaptive_height=True, theme_text_color="Custom",
+                               text_color=c(theme.BERRY if highlight and highlight in text else theme.INK)))
+    sv = MDScrollView(size_hint_y=None, height=dp(380))
+    sv.add_widget(box)
+    dialog = None
+
+    def run(cb):
+        return lambda *_: (dialog.dismiss(), cb())
+
+    buttons = [MDFlatButton(text=t.upper(), on_release=run(cb)) for t, cb in actions]
+    buttons.append(MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss()))
+    dialog = MDDialog(title=title, type="custom", content_cls=sv, md_bg_color=DIALOG_BG,
+                      buttons=buttons)
+    dialog.open()
+    return dialog
+
+
 def confirm(title: str, text: str, actions: list[tuple[str, callable]]):
     dialog = None
 
@@ -284,11 +308,20 @@ class SettingsScreen(MDScreen):
     """Ajustes con dos pestañas: «General» y «Variedades»."""
 
     def on_pre_enter(self, *_):
-        self.show(self.ids.pages.current or "general")
+        self.show(self.ids.pages.current or "general", defer=False)
 
-    def show(self, page: str):
-        self.ids.pages.current = page
-        (self.ids.settings if page == "general" else self.ids.varieties).refresh()
+    def on_enter(self, *_):
+        # La lista de variedades se arma en un momento libre, no al tocar la pestaña.
+        if not getattr(self.ids.varieties, "_rows", None):
+            Clock.schedule_once(lambda *_: self.ids.varieties.refresh(), 0.4)
+
+    def show(self, page: str, defer: bool = True):
+        self.ids.pages.current = page   # el cambio de pestaña se ve al instante
+        tab = self.ids.settings if page == "general" else self.ids.varieties
+        if defer:
+            Clock.schedule_once(lambda *_: tab.refresh(), 0)
+        else:
+            tab.refresh()
 
 
 class VarietyRow(GlassButton):
@@ -434,17 +467,37 @@ def map_dialog(start: tuple, zoom: int, on_pick):
     mp.bind(cx=update, cy=update, zoom=update)
     update()
 
+    state = {"req": None}
+
     def here(*_):
-        def done(lat, lon, acc):
+        def progress(lat, lon, acc):
             mp.center_on(lat, lon, max(int(mp.zoom), 17))
+            coords.text = f"{geo.fmt(lat, lon)} · GPS ±{acc:.0f} m (afinando…)"
+
+        def done(lat, lon, acc):
+            state["req"] = None
+            mp.center_on(lat, lon, max(int(mp.zoom), 18))
             a.toast(f"Centrado en su ubicación (±{acc:.0f} m)")
 
+        def fail(msg):
+            state["req"] = None
+            a.toast(msg)
+
         def granted(ok):
-            if ok:
-                Clock.schedule_once(lambda *_: geo.LocationRequest(done, a.toast).start(), 0)
-            else:
+            if not ok:
                 a.toast("Sin permiso de ubicación")
+                return
+
+            def go(*_):
+                state["req"] = geo.LocationRequest(done, fail, progress)
+                state["req"].start()
+            Clock.schedule_once(go, 0)
         geo.request_location_permission(granted)
+
+    def stop_gps(*_):
+        if state["req"] is not None:
+            state["req"].cancel()
+    view.bind(on_dismiss=stop_gps)
 
     def use(*_):
         lat, lon = mp.center_latlon
@@ -800,6 +853,10 @@ class ObservationScreen(MDScreen):
     def locate_gps(self):
         a = app()
         import geo
+        gps = getattr(self, "_gps", None)
+        if gps is not None and not gps._done:
+            gps.finish()   # «Usar ahora»: se queda con la mejor lectura obtenida
+            return
 
         def granted(ok):
             if not ok:
@@ -807,28 +864,59 @@ class ObservationScreen(MDScreen):
                 return
             Clock.schedule_once(lambda *_: start(), 0)
 
+        def reset_button():
+            self.ids.gps_btn.text = "Mi ubicación"
+            self.ids.gps_btn.icon = "crosshairs-gps"
+
         def start():
-            self.ids.gps_btn.disabled = True
+            obs_id = self.obs["id"]
             self.ids.gps_text.text = "Buscando señal GPS…"
-            self.ids.gps_detail.text = "Puede tardar unos segundos (mejor al aire libre)."
+            self.ids.gps_detail.text = (f"Objetivo ±{geo.LocationRequest.TARGET_M:.0f} m · mejor al aire "
+                                        "libre, con el teléfono quieto")
+            self.ids.gps_btn.text = "Usar ahora"
+            self.ids.gps_btn.icon = "check"
+
+            def progress(lat, lon, acc):
+                if self.obs["id"] != obs_id:
+                    return
+                self.ids.gps_text.text = f"{geo.fmt(lat, lon)}"
+                self.ids.gps_detail.text = (f"Precisión actual ±{acc:.0f} m · buscando ±"
+                                            f"{geo.LocationRequest.TARGET_M:.0f} m…")
+                self.ids.gps_btn.text = f"Usar ahora (±{acc:.0f} m)"
 
             def done(lat, lon, acc):
-                self.ids.gps_btn.disabled = False
+                self._gps = None
+                reset_button()
+                if self.obs["id"] != obs_id:
+                    return
                 self.set_location(lat, lon, acc, "gps")
-                a.toast(f"Ubicación guardada (±{acc:.0f} m)")
+                if acc <= geo.LocationRequest.TARGET_M:
+                    a.toast(f"Ubicación guardada (±{acc:.0f} m)")
+                else:
+                    a.toast(f"Ubicación guardada con ±{acc:.0f} m (no se logró ±10 m: "
+                            "pruebe al aire libre y reintente)")
 
             def fail(msg):
-                self.ids.gps_btn.disabled = False
+                self._gps = None
+                reset_button()
                 self.refresh_location()
                 a.toast(msg)
 
             try:
-                self._gps = geo.LocationRequest(done, fail)
+                self._gps = geo.LocationRequest(done, fail, progress)
                 self._gps.start()
             except Exception as exc:  # noqa: BLE001
                 fail(f"No se pudo leer el GPS: {exc}")
 
         geo.request_location_permission(granted)
+
+    def on_leave(self, *_):
+        gps = getattr(self, "_gps", None)
+        if gps is not None:
+            gps.cancel()   # no dejar el GPS encendido al salir del registro
+            self._gps = None
+            self.ids.gps_btn.text = "Mi ubicación"
+            self.ids.gps_btn.icon = "crosshairs-gps"
 
     def pick_on_map(self):
         a = app()
@@ -1460,9 +1548,13 @@ class SettingsTab(MDScreen):
         self.ids.drive_bar.value = 100 * st["done"] / total if on and total else 0
         self.ids.drive_bar_box.opacity = 1 if on and total else 0
         self.ids.drive_connect.text = ("Reconectar cuenta" if on else "Conectar Google Drive")
-        opts = self.ids.drive_opts
+        # Referencia FUERTE: al quitar el bloque del árbol, `ids` (referencia débil) lo
+        # perdería y el recolector lo borraría → ReferenceError al volver a «General».
         if not hasattr(self, "_drive_slot"):
+            opts = self.ids.drive_opts.__self__   # objeto real, no el proxy débil de `ids`
+            self._drive_opts = opts
             self._drive_slot = (opts.parent, opts.parent.children.index(opts))
+        opts = self._drive_opts
         parent, index = self._drive_slot
         if on and opts.parent is None:
             parent.add_widget(opts, index=index)
@@ -1485,23 +1577,22 @@ class SettingsTab(MDScreen):
         a.drive.connect(done)
 
     def drive_diagnostics(self):
-        a = app()
-        lines = a.drive.diagnostics()
         from platform_utils import app_version
-        from kivymd.uix.scrollview import MDScrollView
-        box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
-                          padding=(0, 0, 0, dp(8)))
+        lines = app().drive.diagnostics()
         head = f"PhenoRubus {app_version()} · paquete org.rubus.fenorubus"
-        for text in [head] + (lines or ["Sin registros: toque «Conectar Google Drive» y vuelva aquí."]):
-            box.add_widget(MDLabel(text=text, font_style="Body2", adaptive_height=True,
-                                   theme_text_color="Custom",
-                                   text_color=c(theme.BERRY if "✗" in text else theme.INK)))
-        sv = MDScrollView(size_hint_y=None, height=dp(380))
-        sv.add_widget(box)
-        dialog = MDDialog(title="Diagnóstico de Google Drive", type="custom", content_cls=sv,
-                          md_bg_color=DIALOG_BG,
-                          buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
-        dialog.open()
+        text_dialog("Diagnóstico de Google Drive",
+                    [head] + (lines or ["Sin registros: toque «Conectar Google Drive» y vuelva aquí."]),
+                    highlight="✗")
+
+    def show_errors(self):
+        import crashguard
+        from platform_utils import app_version
+        lines = crashguard.entries()
+        extra = [("Borrar registro", lambda: (crashguard.clear(), app().toast("Registro borrado")))] \
+            if lines else []
+        text_dialog("Registro de errores",
+                    [f"PhenoRubus {app_version()}"] + (lines or ["Sin errores registrados."]),
+                    highlight="Error", actions=extra, small=True)
 
     def drive_disconnect(self):
         confirm("Desconectar Google Drive",

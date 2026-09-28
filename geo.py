@@ -135,102 +135,146 @@ def request_location_permission(callback) -> None:
 
 
 class LocationRequest:
-    """Posición actual (una sola lectura). callback(lat, lon, precisión_m) o error(msg).
+    """Posición precisa del teléfono. callback(lat, lon, precisión_m) o error(msg).
 
-    Android 11+: LocationManager.getCurrentLocation; Android 8-10: requestSingleUpdate.
-    Si no llega una posición nueva, se usa la última conocida del teléfono.
+    Escucha GPS (satélites) y red a la vez con LocationManager.requestLocationUpdates,
+    guarda la mejor lectura y termina en cuanto la precisión llega a `target` metros
+    (±10 m por defecto) o al vencer `timeout`, entregando la mejor obtenida.
+    `progress(lat, lon, precisión)` informa cada mejora (para mostrarla en vivo).
     Debe iniciarse en el hilo principal de Kivy (clases resueltas por pyjnius).
     """
 
-    def __init__(self, callback, error):
-        self.callback, self.error = callback, error
-        self._refs = []
-        self._done = False
+    TARGET_M = 10.0
+    TIMEOUT_S = 45
+    MAX_AGE_S = 20   # lecturas «últimas conocidas» más viejas no sirven como punto de partida
 
-    def _finish(self, loc):
-        from kivy.clock import Clock
+    def __init__(self, callback, error, progress=None, target: float | None = None):
+        self.callback, self.error, self.progress = callback, error, progress
+        self.target = target or self.TARGET_M
+        self._refs = []
+        self._best = None      # (precisión, lat, lon)
+        self._done = False
+        self._lm = None
+        self._timer = None
+
+    # ------------------------------------------------------------- lecturas
+    def _offer(self, loc):
+        """Llamado desde el hilo de Android con cada nueva posición."""
+        if loc is None or self._done:
+            return
+        try:
+            acc = float(loc.getAccuracy()) if loc.hasAccuracy() else 999.0
+            lat, lon = float(loc.getLatitude()), float(loc.getLongitude())
+        except Exception:  # noqa: BLE001
+            return
+        if self._best is None or acc < self._best[0]:
+            self._best = (acc, lat, lon)
+            from kivy.clock import Clock
+            if self.progress:
+                Clock.schedule_once(lambda *_: self.progress(lat, lon, acc) if not self._done else None)
+            if acc <= self.target:
+                Clock.schedule_once(lambda *_: self.finish())
+
+    def finish(self, *_):
+        """Termina y entrega la mejor lectura (puede llamarse para «usar ya»)."""
         if self._done:
             return
         self._done = True
-        if loc is None:
-            last = self._last_known()
-            if last is None:
-                Clock.schedule_once(lambda *_: self.error(
-                    "No se obtuvo la ubicación. Active la ubicación del teléfono y reintente "
-                    "al aire libre."))
-                return
-            loc = last
-        lat, lon, acc = loc.getLatitude(), loc.getLongitude(), loc.getAccuracy()
-        Clock.schedule_once(lambda *_: self.callback(lat, lon, acc))
+        self._stop_updates()
+        if self._timer is not None:
+            self._timer.cancel()
+        if self._best is None:
+            self.error("No se obtuvo la ubicación. Active la ubicación del teléfono (modo alta "
+                       "precisión) y reintente al aire libre.")
+            return
+        acc, lat, lon = self._best
+        self.callback(lat, lon, acc)
 
-    def _manager(self):
-        from jnius import autoclass  # type: ignore
-        act = autoclass("org.kivy.android.PythonActivity").mActivity
-        Context = autoclass("android.content.Context")
-        return act, act.getSystemService(Context.LOCATION_SERVICE)
+    def cancel(self):
+        self._done = True
+        self._stop_updates()
+        if self._timer is not None:
+            self._timer.cancel()
 
-    def _last_known(self):
-        try:
-            _act, lm = self._manager()
-            best = None
-            for prov in lm.getProviders(True).toArray():
-                loc = lm.getLastKnownLocation(prov)
-                if loc is not None and (best is None or loc.getTime() > best.getTime()):
-                    best = loc
-            return best
-        except Exception:  # noqa: BLE001
-            return None
+    def _stop_updates(self):
+        if self._lm is None:
+            return
+        for lis in self._refs:
+            try:
+                self._lm.removeUpdates(lis)
+            except Exception:  # noqa: BLE001
+                pass
 
-    def start(self, timeout: float = 30) -> None:
+    # --------------------------------------------------------------- inicio
+    def start(self, timeout: float | None = None) -> None:
         if not IS_ANDROID:
             self.error("La ubicación GPS está disponible en el teléfono.")
             return
+        import time
         from jnius import PythonJavaClass, autoclass, java_method  # type: ignore
         from kivy.clock import Clock
-        act, lm = self._manager()
+        act = autoclass("org.kivy.android.PythonActivity").mActivity
+        Context = autoclass("android.content.Context")
+        lm = act.getSystemService(Context.LOCATION_SERVICE)
+        self._lm = lm
         LocationManager = autoclass("android.location.LocationManager")
-        enabled = [p for p in ("fused", LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-                   if lm.getAllProviders().contains(p) and lm.isProviderEnabled(p)]
-        if not enabled:
+        providers = [p for p in (LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                     if lm.getAllProviders().contains(p) and lm.isProviderEnabled(p)]
+        if not providers:
             self.error("La ubicación del teléfono está desactivada. Actívela en Ajustes rápidos.")
             return
-        provider = enabled[0]
+        if LocationManager.GPS_PROVIDER not in providers:
+            self.error("El GPS del teléfono está desactivado: active «Ubicación» en modo de alta "
+                       "precisión para lograr ±10 m.")
+            return
         me = self
-        api = autoclass("android.os.Build$VERSION").SDK_INT
-        if api >= 30:
-            class Consumer(PythonJavaClass):
-                __javainterfaces__ = ["java/util/function/Consumer"]
-                __javacontext__ = "app"
 
-                @java_method("(Ljava/lang/Object;)V")
-                def accept(self, loc):
-                    me._finish(loc)
+        class Listener(PythonJavaClass):
+            """Implementa TODOS los métodos (también los «default» de Android 11+):
+            un método que falte haría fallar la llamada desde Java."""
+            __javainterfaces__ = ["android/location/LocationListener"]
+            __javacontext__ = "app"
 
-            cons = Consumer()
-            self._refs = [cons]
-            lm.getCurrentLocation(provider, None, act.getMainExecutor(), cons)
-        else:
-            class Listener(PythonJavaClass):
-                __javainterfaces__ = ["android/location/LocationListener"]
-                __javacontext__ = "app"
+            @java_method("(Landroid/location/Location;)V", name="onLocationChanged")
+            def on_location(self, loc):
+                me._offer(loc)
 
-                @java_method("(Landroid/location/Location;)V")
-                def onLocationChanged(self, loc):  # noqa: N802
-                    me._finish(loc)
-
-                @java_method("(Ljava/lang/String;ILandroid/os/Bundle;)V")
-                def onStatusChanged(self, provider, status, extras):  # noqa: N802
+            @java_method("(Ljava/util/List;)V", name="onLocationChanged")
+            def on_locations(self, locs):
+                try:
+                    for i in range(locs.size()):
+                        me._offer(locs.get(i))
+                except Exception:  # noqa: BLE001
                     pass
 
-                @java_method("(Ljava/lang/String;)V")
-                def onProviderEnabled(self, provider):  # noqa: N802
-                    pass
+            @java_method("(I)V")
+            def onFlushComplete(self, code):  # noqa: N802
+                pass
 
-                @java_method("(Ljava/lang/String;)V")
-                def onProviderDisabled(self, provider):  # noqa: N802
-                    pass
+            @java_method("(Ljava/lang/String;ILandroid/os/Bundle;)V")
+            def onStatusChanged(self, provider, status, extras):  # noqa: N802
+                pass
 
+            @java_method("(Ljava/lang/String;)V")
+            def onProviderEnabled(self, provider):  # noqa: N802
+                pass
+
+            @java_method("(Ljava/lang/String;)V")
+            def onProviderDisabled(self, provider):  # noqa: N802
+                pass
+
+        looper = autoclass("android.os.Looper").getMainLooper()
+        for prov in providers:
             lis = Listener()
-            self._refs = [lis]
-            lm.requestSingleUpdate(provider, lis, autoclass("android.os.Looper").getMainLooper())
-        Clock.schedule_once(lambda *_: self._finish(None), timeout)
+            self._refs.append(lis)
+            lm.requestLocationUpdates(prov, 500, 0.0, lis, looper)
+        # Punto de partida inmediato: última posición reciente del teléfono (si hay).
+        now_ms = time.time() * 1000
+        for prov in providers:
+            try:
+                last = lm.getLastKnownLocation(prov)
+                if last is not None and now_ms - last.getTime() < self.MAX_AGE_S * 1000:
+                    self._offer(last)
+            except Exception:  # noqa: BLE001
+                pass
+        self._timer = Clock.schedule_once(self.finish, timeout or self.TIMEOUT_S)

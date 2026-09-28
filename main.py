@@ -58,6 +58,8 @@ class FenoRubusApp(MDApp):
 
     # ------------------------------------------------------------ build
     def build(self):
+        import crashguard
+        crashguard.install(notify=lambda text: self.toast(text))
         theme.apply(self.theme_cls)
         if platform not in ("android", "ios"):
             Window.size = (412, 860)

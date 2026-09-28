@@ -595,3 +595,40 @@ def test_import_with_coordinates(db, tmp_path):
     rows = db.query("SELECT latitude, longitude, gps_source FROM observations WHERE variety_id=? "
                     "AND latitude IS NOT NULL", (v["id"],))
     assert rows and abs(rows[0]["latitude"] + 33.45123) < 1e-6 and rows[0]["gps_source"] == "histórico"
+
+
+def test_gps_keeps_best_reading_and_stops_at_10m():
+    import geo
+    from kivy.clock import Clock
+
+    class Loc:
+        def __init__(self, lat, lon, acc):
+            self.lat, self.lon, self.acc = lat, lon, acc
+        def hasAccuracy(self): return True
+        def getAccuracy(self): return self.acc
+        def getLatitude(self): return self.lat
+        def getLongitude(self): return self.lon
+
+    got, prog = [], []
+    req = geo.LocationRequest(lambda *a: got.append(a), lambda m: got.append(("error", m)),
+                              lambda *a: prog.append(a[2]))
+    for acc in (48, 30, 35, 22):          # 35 es peor que 30: se ignora
+        req._offer(Loc(-33.45, -70.66, acc))
+    Clock.tick()
+    assert prog == [48, 30, 22] and not got
+    req._offer(Loc(-33.4512, -70.6624, 8))  # alcanza el objetivo (±10 m) → termina solo
+    Clock.tick(); Clock.tick()
+    assert got == [(-33.4512, -70.6624, 8.0)]
+    req._offer(Loc(0, 0, 3))                # después de terminar no cambia nada
+    Clock.tick()
+    assert len(got) == 1
+
+    # «Usar ahora» o fin del tiempo: entrega la mejor lectura aunque no llegue a 10 m
+    got2 = []
+    req2 = geo.LocationRequest(lambda *a: got2.append(a), lambda m: got2.append(("error", m)))
+    req2._offer(Loc(-33.1, -70.1, 25))
+    req2.finish()
+    assert got2 == [(-33.1, -70.1, 25.0)]
+    req3 = geo.LocationRequest(lambda *a: None, lambda m: got2.append(("error", m)))
+    req3.finish()
+    assert got2[-1][0] == "error"
