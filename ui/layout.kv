@@ -683,7 +683,7 @@
     MDIconButton:
         icon: "share-variant-outline"
         pos_hint: {"center_y": .5}
-        on_release: app.share_file(root.path)
+        on_release: app.report_actions(root.path, title="Enviar o guardar", info=root.title)
 
 <SettingsTab>:
     md_bg_color: 0, 0, 0, 0

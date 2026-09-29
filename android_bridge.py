@@ -342,15 +342,53 @@ class AndroidMedia:
         shutil.copyfile(path, dest)
         return autoclass("android.net.Uri").fromFile(autoclass("java.io.File")(dest))
 
-    def share(self, path: str, mime: str, title: str = "Compartir informe") -> None:
+    WHATSAPP_PACKAGES = ("com.whatsapp", "com.whatsapp.w4b")   # normal y Business
+
+    def public_uri(self, path: str, mime: str):
+        """URI pública del archivo en Descargas/PhenoRubus (se copia UNA sola vez por versión
+        del archivo: abrir, guardar y compartir ya no crean duplicados «(1)», «(2)»)."""
+        cache = self.__dict__.setdefault("_exported", {})
+        key = (path, os.path.getmtime(path))
+        if key not in cache:
+            cache[key] = self.export_to_downloads(path, mime)
+        return cache[key]
+
+    def save_public(self, path: str, mime: str) -> str:
+        """Guarda en Descargas/PhenoRubus y devuelve la ubicación legible."""
+        self.public_uri(path, mime)
+        return f"Descargas › {APP_NAME} › {os.path.basename(path)}"
+
+    def _installed(self, package: str) -> bool:
+        try:
+            return self.activity.getPackageManager().getLaunchIntentForPackage(package) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def share(self, path: str, mime: str, title: str = "Compartir informe", target: str | None = None,
+              subject: str = "", text: str = "") -> None:
+        """target: None (todas las apps), "whatsapp" o "email"."""
         from jnius import autoclass, cast  # type: ignore
         String = autoclass("java.lang.String")
-        uri = self.export_to_downloads(path, mime)
+        uri = self.public_uri(path, mime)
         intent = self.Intent(self.Intent.ACTION_SEND)
         intent.setType(mime)
         intent.putExtra(self.Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
-        intent.putExtra(self.Intent.EXTRA_SUBJECT, os.path.basename(path))
+        intent.putExtra(self.Intent.EXTRA_SUBJECT, subject or os.path.basename(path))
+        if text:
+            intent.putExtra(self.Intent.EXTRA_TEXT, String(text))
         intent.addFlags(self.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if target == "whatsapp":
+            pkg = next((p for p in self.WHATSAPP_PACKAGES if self._installed(p)), None)
+            if pkg is None:
+                raise RuntimeError("WhatsApp no está instalado en este teléfono")
+            intent.setPackage(pkg)
+            self.activity.startActivity(intent)
+            return
+        if target == "email":
+            # Solo apps de correo: el «selector» mailto: filtra el menú a Gmail, Outlook, etc.
+            Uri = autoclass("android.net.Uri")
+            intent.setSelector(self.Intent(self.Intent.ACTION_SENDTO, Uri.parse("mailto:")))
+            title = "Enviar por correo"
         chooser = self.Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
         self.activity.startActivity(chooser)
 
@@ -367,7 +405,7 @@ class AndroidMedia:
         return False
 
     def open(self, path: str, mime: str) -> None:
-        uri = self.export_to_downloads(path, mime)
+        uri = self.public_uri(path, mime)
         intent = self.Intent(self.Intent.ACTION_VIEW)
         intent.setDataAndType(uri, mime)
         intent.addFlags(self.Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -512,8 +550,12 @@ class DesktopMedia:
         self.file_chooser(lambda p: callback(p, os.path.basename(p) if p else ""),
                           exts or (".pdf", ".txt", ".md", ".html", ".htm", ".csv", ".zip"))
 
-    def share(self, path: str, mime: str, title: str = "") -> None:
+    def share(self, path: str, mime: str, title: str = "", target: str | None = None,
+              subject: str = "", text: str = "") -> None:
         self.open(path, mime)
+
+    def save_public(self, path: str, mime: str) -> str:
+        return self.export_to_downloads(path, mime)
 
     def preview(self, path: str, title: str = "") -> None:
         self.open(path, "text/html")

@@ -1703,7 +1703,7 @@ class SettingsTab(MDScreen):
             try:
                 from data_transfer import full_backup
                 path = full_backup(a.db)
-                a.media.export_to_downloads(path, "application/zip")
+                a.media.save_public(path, "application/zip")   # una sola copia en Descargas
                 if a.db.get_setting("drive_enabled", False):
                     a.drive.enqueue(None, path, remote=f"Respaldos/{os.path.basename(path)}")
                 size = os.path.getsize(path) / 1e6
@@ -2276,7 +2276,7 @@ class AILabScreen(MDScreen):
         a = app()
         path = write_template(os.path.join(data_subdir("tmp"), "plantilla_historico_phenorubus.csv"))
         try:
-            a.media.export_to_downloads(path, "text/csv")
+            a.media.save_public(path, "text/csv")
             a.toast("Plantilla guardada en Descargas/PhenoRubus")
         except Exception as exc:  # noqa: BLE001
             a.toast(f"No se pudo guardar: {exc}")

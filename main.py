@@ -280,20 +280,50 @@ class FenoRubusApp(MDApp):
         if error:
             self.toast(f"Error al generar: {error}")
             return
-        self.toast(f"Listo: {os.path.basename(res.path)} ({res.size_kb} KB)")
         if on_done:
             on_done(res)
-        self.open_file(res.path)
+        self.report_actions(res.path, title="Informe listo",
+                            info=f"{os.path.basename(res.path)} · {res.size_kb} KB")
+
+    # ------------------------------------------- enviar / guardar informes
+    def report_actions(self, path: str, title: str = "Informe", info: str = ""):
+        """Menú: WhatsApp, correo, guardar en el teléfono, ver u otras apps."""
+        from ui.screens import pick_dialog
+        size_mb = os.path.getsize(path) / 1e6
+        heavy = size_mb > 20
+        mail_note = (f"{size_mb:.0f} MB: puede superar el límite de adjuntos (use ZIP)" if heavy
+                     else "Gmail, Outlook u otra app de correo")
+        pick_dialog(f"{title}" + (f"\n{info}" if info else ""), [
+            ("WhatsApp", "Enviar como documento", lambda: self.share_file(path, target="whatsapp")),
+            ("Correo electrónico", mail_note, lambda: self.share_file(path, target="email")),
+            ("Guardar en el teléfono", "Descargas › PhenoRubus", lambda: self.save_file(path)),
+            ("Ver informe", "Abrir en el navegador", lambda: self.open_file(path)),
+            ("Otras apps…", "Drive, Telegram, Bluetooth…", lambda: self.share_file(path)),
+        ])
+
+    def _mime(self, path: str) -> str:
+        return MIME.get(os.path.splitext(path)[1], "*/*")
 
     def open_file(self, path: str):
         try:
-            self.media.open(path, MIME.get(os.path.splitext(path)[1], "*/*"))
+            self.media.open(path, self._mime(path))
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo abrir: {exc}")
 
-    def share_file(self, path: str, mime: str | None = None):
+    def save_file(self, path: str):
         try:
-            self.media.share(path, mime or MIME.get(os.path.splitext(path)[1], "*/*"))
+            where = self.media.save_public(path, self._mime(path))
+            self.toast(f"Guardado en {where}")
+        except Exception as exc:  # noqa: BLE001
+            self.toast(f"No se pudo guardar: {exc}")
+
+    def share_file(self, path: str, mime: str | None = None, target: str | None = None):
+        name = os.path.splitext(os.path.basename(path))[0]
+        try:
+            self.media.share(path, mime or self._mime(path), target=target,
+                             subject=f"PhenoRubus · {name}",
+                             text="Informe fenológico generado con PhenoRubus. Ábralo con el "
+                                  "navegador del teléfono o del computador.")
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo compartir: {exc}")
 
