@@ -317,7 +317,7 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
         if method == "GET":  # búsqueda de carpeta
             return 200, json.dumps({"files": []}).encode()
         if "uploadType=multipart" in url:
-            assert b"image/jpeg" in body and b'"parents"' in body
+            assert (b"image/jpeg" in body or b"text/html" in body) and b'"parents"' in body
             fid = f"f{len(files)}"
             files[fid] = body
             return 200, json.dumps({"id": fid}).encode()
@@ -360,11 +360,14 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
     # Informes: el semanal va a la carpeta de su semana; los demás a «Informes»
     rep = ReportGenerator(db, str(tmp_path / "out"))
     weekly_path = rep.weekly(week["id"]).path
-    remote = drive.enqueue_report(weekly_path)
+    remote = drive.enqueue_report(weekly_path, flush=False)   # sin hilos: prueba determinista
     assert remote == f"Temporada {week['season']}-{week['season'] + 1}/{week_dir}/{os.path.basename(weekly_path)}"
     other = tmp_path / f"matriz_T{week['season']}.html"
     other.write_text("<html></html>", encoding="utf-8")
-    assert drive.enqueue_report(str(other)).endswith(f"/Informes/{other.name}")
+    assert drive.enqueue_report(str(other), flush=False).endswith(f"/Informes/{other.name}")
+    assert drive.flush() == 2 and drive.status()["pending"] == 0
+    names = [m["name"] for m in folders.values()]
+    assert "Informes" in names
     row = db.query_one("SELECT * FROM drive_queue WHERE photo_id=?", (pid,))
     assert row["drive_id"] in files and row["name"].endswith("meeker_detalle_1.jpg")
 

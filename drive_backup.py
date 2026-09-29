@@ -381,7 +381,7 @@ class DriveBackup:
             return f"{self.week_folder(row['season'], row['week_number'], row['start_date'])}/{base}"
         return base
 
-    def enqueue_report(self, path: str) -> str:
+    def enqueue_report(self, path: str, flush: bool = True) -> str:
         """Sube un informe: los semanales van a la carpeta de su semana; el resto a
         «Temporada …/Informes». Devuelve la ruta en Drive."""
         import re
@@ -398,7 +398,7 @@ class DriveBackup:
             t = re.search(r"_T(\d{4})", base)
             season = int(t[1]) if t else _dt.date.today().year
             remote = f"Temporada {season}-{season + 1}/Informes/{base}"
-        self.enqueue(None, path, remote=remote)
+        self.enqueue(None, path, remote=remote, flush=flush)
         return remote
 
     def enqueue(self, photo_id: int | None, path: str, flush: bool = True,
