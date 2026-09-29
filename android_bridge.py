@@ -371,6 +371,21 @@ class AndroidMedia:
         if text:
             intent.putExtra(self.Intent.EXTRA_TEXT, String(text))
         intent.addFlags(self.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try:  # el permiso de lectura viaja con la ClipData (necesario en Android 10+)
+            ClipData = autoclass("android.content.ClipData")
+            intent.setClipData(ClipData.newRawUri(String(""), uri))
+        except Exception:  # noqa: BLE001
+            pass
+        if target and target.startswith("email:"):
+            # App de correo concreta elegida por el usuario (ver email_apps()).
+            intent.setPackage(target.split(":", 1)[1])
+            try:
+                self.activity.startActivity(intent)
+                return
+            except Exception:  # noqa: BLE001
+                intent.setPackage(None)
+                title = "Elija su app de correo"
+                target = None
         if target == "whatsapp":
             # No se pregunta si está instalado: desde Android 11 la «visibilidad de paquetes»
             # oculta las otras apps y la consulta dice «no instalado» aunque lo esté.
@@ -384,13 +399,31 @@ class AndroidMedia:
                     continue
             intent.setPackage(None)   # sin WhatsApp: menú general para elegir otra app
             title = "WhatsApp no respondió: elija la app"
-        if target == "email":
-            # Solo apps de correo: el «selector» mailto: filtra el menú a Gmail, Outlook, etc.
-            Uri = autoclass("android.net.Uri")
-            intent.setSelector(self.Intent(self.Intent.ACTION_SENDTO, Uri.parse("mailto:")))
-            title = "Enviar por correo"
+        if target == "email":   # no se encontró app de correo: menú general
+            title = "Elija su app de correo"
         chooser = self.Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
         self.activity.startActivity(chooser)
+
+    def email_apps(self) -> list[tuple[str, str]]:
+        """[(nombre visible, paquete)] de las apps de correo instaladas (Gmail, Outlook…).
+        Requiere el <queries> de android/extra_manifest.xml (Android 11+)."""
+        from jnius import autoclass  # type: ignore
+        Uri = autoclass("android.net.Uri")
+        pm = self.activity.getPackageManager()
+        probe = self.Intent(self.Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+        out, seen = [], set()
+        try:
+            infos = pm.queryIntentActivities(probe, 0)
+            for i in range(infos.size()):
+                info = infos.get(i)
+                pkg = info.activityInfo.packageName
+                if pkg in seen:
+                    continue
+                seen.add(pkg)
+                out.append((str(info.loadLabel(pm).toString()), pkg))
+        except Exception as exc:  # noqa: BLE001
+            print("email_apps:", exc)
+        return out
 
     def preview(self, path: str, title: str = "Vista previa") -> None:
         if not hasattr(self, "_web"):
@@ -556,6 +589,9 @@ class DesktopMedia:
 
     def save_public(self, path: str, mime: str) -> str:
         return self.export_to_downloads(path, mime)
+
+    def email_apps(self) -> list[tuple[str, str]]:
+        return []
 
     def preview(self, path: str, title: str = "") -> None:
         self.open(path, "text/html")

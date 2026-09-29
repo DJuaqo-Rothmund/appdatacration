@@ -87,6 +87,10 @@ android.accept_sdk_license = True
 # Para teléfonos antiguos de 32 bits, compilar aparte con: android.archs = armeabi-v7a
 android.archs = arm64-v8a
 
+# (str) XML extra dentro de <manifest>: <queries> para ver WhatsApp y apps de correo
+# (visibilidad de paquetes de Android 11+) al enviar informes.
+android.extra_manifest_xml = ./android/extra_manifest.xml
+
 # (list) Dependencias Gradle: Google Identity Services (autorización de Google Drive).
 android.gradle_dependencies = com.google.android.gms:play-services-auth:21.2.0
 

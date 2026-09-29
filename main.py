@@ -295,7 +295,7 @@ class FenoRubusApp(MDApp):
                      else "Gmail, Outlook u otra app de correo")
         pick_dialog(f"{title}" + (f"\n{info}" if info else ""), [
             ("WhatsApp", "Enviar como documento", lambda: self.share_file(path, target="whatsapp")),
-            ("Correo electrónico", mail_note, lambda: self.share_file(path, target="email")),
+            ("Correo electrónico", mail_note, lambda: self.send_email(path)),
             ("Guardar en el teléfono", "Descargas › PhenoRubus", lambda: self.save_file(path)),
             ("Guardar en Google Drive", "Carpeta de la semana en «PhenoRubus · Imágenes de Fenología»"
              if self.db.get_setting("drive_enabled", False) else "Primero conecte Drive en Ajustes",
@@ -319,6 +319,22 @@ class FenoRubusApp(MDApp):
             self.toast(f"Guardado en {where}")
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo guardar: {exc}")
+
+    def send_email(self, path: str):
+        """Una app de correo → directo; varias → el usuario elige; ninguna → menú general."""
+        try:
+            apps = self.media.email_apps()
+        except Exception:  # noqa: BLE001
+            apps = []
+        if len(apps) == 1:
+            self.share_file(path, target=f"email:{apps[0][1]}")
+        elif apps:
+            from ui.screens import pick_dialog
+            pick_dialog("Enviar por correo con…", [
+                (label, "", lambda pkg=pkg: self.share_file(path, target=f"email:{pkg}"))
+                for label, pkg in apps])
+        else:
+            self.share_file(path, target="email")
 
     def save_to_drive(self, path: str):
         if not self.db.get_setting("drive_enabled", False):
