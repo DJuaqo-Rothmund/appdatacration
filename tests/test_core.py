@@ -351,6 +351,20 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
     assert st["done"] == 2 and st["pending"] == 0 and st["last_sync"]
     names = [m["name"] for m in folders.values()]
     assert ROOT_FOLDER in names and f"Temporada {week['season']}-{week['season'] + 1}" in names
+    start = dt.date.fromisoformat(week["start_date"])
+    week_dir = f"Semana {week['week_number']:02d} · {start:%d-%m-%Y}"
+    assert week_dir in names                      # carpeta por semana de muestreo
+    wk = next(fid for fid, m in folders.items() if m["name"] == week_dir)
+    assert any(f'"parents": ["{wk}"]'.encode() in body for body in files.values())
+
+    # Informes: el semanal va a la carpeta de su semana; los demás a «Informes»
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    weekly_path = rep.weekly(week["id"]).path
+    remote = drive.enqueue_report(weekly_path)
+    assert remote == f"Temporada {week['season']}-{week['season'] + 1}/{week_dir}/{os.path.basename(weekly_path)}"
+    other = tmp_path / f"matriz_T{week['season']}.html"
+    other.write_text("<html></html>", encoding="utf-8")
+    assert drive.enqueue_report(str(other)).endswith(f"/Informes/{other.name}")
     row = db.query_one("SELECT * FROM drive_queue WHERE photo_id=?", (pid,))
     assert row["drive_id"] in files and row["name"].endswith("meeker_detalle_1.jpg")
 

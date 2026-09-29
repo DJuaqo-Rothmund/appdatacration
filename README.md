@@ -232,9 +232,12 @@ Para actualizar: descargar el APK nuevo, abrirlo y tocar **Actualizar**.
 
 Cada foto nueva queda en el teléfono (carpeta «Imágenes de Fenología» para las de
 la cámara) **y** se encola para subirse a *Mi unidad › PhenoRubus · Imágenes de
-Fenología › Temporada AAAA-AAAA*. Sin señal, la cola se guarda en SQLite y se sube
+Fenología › Temporada AAAA-AAAA › Semana NN · dd-mm-aaaa*. Sin señal, la cola se guarda en SQLite y se sube
 sola al volver la conexión (por defecto solo con Wi-Fi; se cambia en Ajustes).
 La app pide el permiso mínimo `drive.file`: solo ve los archivos que ella creó.
+
+Los informes se pueden subir desde el menú del informe («Guardar en Google Drive»): los
+semanales a la carpeta de su semana y el resto a «Temporada … › Informes».
 
 Configuración única (Google exige registrar la app, gratis):
 

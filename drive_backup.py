@@ -362,17 +362,44 @@ class DriveBackup:
                 pass
 
     # ------------------------------------------------------------- cola
+    @staticmethod
+    def week_folder(season: int, week_number: int, start_date: str) -> str:
+        """«Temporada 2026-2027/Semana 04 · 28-09-2026» (el número ordena las carpetas)."""
+        d = _dt.date.fromisoformat(str(start_date)[:10])
+        return f"Temporada {season}-{season + 1}/Semana {week_number:02d} · {d:%d-%m-%Y}"
+
     def _remote_name(self, photo_id: int | None, path: str) -> str:
-        """«Temporada 2026-2027/<archivo>» según la observación de la foto."""
+        """Carpeta de la SEMANA de muestreo de la foto + nombre del archivo."""
         row = None
         if photo_id is not None:
             row = self.db.query_one(
-                "SELECT w.season FROM photos p JOIN observations o ON o.id = p.observation_id "
+                "SELECT w.season, w.week_number, w.start_date FROM photos p "
+                "JOIN observations o ON o.id = p.observation_id "
                 "JOIN sampling_weeks w ON w.id = o.week_id WHERE p.id = ?", (photo_id,))
         base = os.path.basename(path)
         if row:
-            return f"Temporada {row['season']}-{row['season'] + 1}/{base}"
+            return f"{self.week_folder(row['season'], row['week_number'], row['start_date'])}/{base}"
         return base
+
+    def enqueue_report(self, path: str) -> str:
+        """Sube un informe: los semanales van a la carpeta de su semana; el resto a
+        «Temporada …/Informes». Devuelve la ruta en Drive."""
+        import re
+        base = os.path.basename(path)
+        m = re.match(r"semanal_T(\d{4})_S(\d+)", base)
+        remote = None
+        if m:
+            season, number = int(m[1]), int(m[2])
+            w = self.db.query_one("SELECT start_date FROM sampling_weeks WHERE season=? AND week_number=?",
+                                  (season, number))
+            if w:
+                remote = f"{self.week_folder(season, number, w['start_date'])}/{base}"
+        if remote is None:
+            t = re.search(r"_T(\d{4})", base)
+            season = int(t[1]) if t else _dt.date.today().year
+            remote = f"Temporada {season}-{season + 1}/Informes/{base}"
+        self.enqueue(None, path, remote=remote)
+        return remote
 
     def enqueue(self, photo_id: int | None, path: str, flush: bool = True,
                 remote: str | None = None) -> int | None:
@@ -569,7 +596,11 @@ class DriveBackup:
                                         ("El archivo ya no existe en el teléfono", r["id"]))
                         continue
                     try:
-                        fid = self._upload(r["path"], r["name"])
+                        # Fotos: la carpeta se calcula al subir (semana actual del registro,
+                        # también para lo que quedó en cola con el esquema anterior).
+                        name = (self._remote_name(r["photo_id"], r["path"]) if r["photo_id"]
+                                else r["name"])
+                        fid = self._upload(r["path"], name)
                     except (Offline, NeedsConsent):
                         raise
                     except DriveError as exc:

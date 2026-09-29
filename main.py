@@ -297,6 +297,9 @@ class FenoRubusApp(MDApp):
             ("WhatsApp", "Enviar como documento", lambda: self.share_file(path, target="whatsapp")),
             ("Correo electrónico", mail_note, lambda: self.share_file(path, target="email")),
             ("Guardar en el teléfono", "Descargas › PhenoRubus", lambda: self.save_file(path)),
+            ("Guardar en Google Drive", "Carpeta de la semana en «PhenoRubus · Imágenes de Fenología»"
+             if self.db.get_setting("drive_enabled", False) else "Primero conecte Drive en Ajustes",
+             lambda: self.save_to_drive(path)),
             ("Ver informe", "Abrir en el navegador", lambda: self.open_file(path)),
             ("Otras apps…", "Drive, Telegram, Bluetooth…", lambda: self.share_file(path)),
         ])
@@ -316,6 +319,13 @@ class FenoRubusApp(MDApp):
             self.toast(f"Guardado en {where}")
         except Exception as exc:  # noqa: BLE001
             self.toast(f"No se pudo guardar: {exc}")
+
+    def save_to_drive(self, path: str):
+        if not self.db.get_setting("drive_enabled", False):
+            self.toast("Conecte Google Drive en Ajustes › Respaldo en Google Drive")
+            return
+        remote = self.drive.enqueue_report(path)
+        self.toast(f"Se sube a Drive: {remote.rsplit('/', 1)[0]}")
 
     def share_file(self, path: str, mime: str | None = None, target: str | None = None):
         name = os.path.splitext(os.path.basename(path))[0]
