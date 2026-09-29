@@ -46,6 +46,9 @@ MIND_FIRE = "#FFB454"
 
 BACKGROUND = resource_path("assets", "ui", "background.jpg")
 LOGO = resource_path("assets", "ui", "logo.png")
+# Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android
+# (buildozer.spec › android.presplash_color) para que ambas se vean como una sola.
+SPLASH_BG = "#F2F4EE"
 
 
 def nav_icon(name: str, active: bool) -> str:

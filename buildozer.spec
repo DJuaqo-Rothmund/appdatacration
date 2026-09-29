@@ -31,7 +31,7 @@ requirements = python3,kivy==2.3.1,kivymd==1.2.0,pillow,numpy,jinja2,markupsafe,
 # (str) Presplash / icon
 presplash.filename = %(source.dir)s/assets/presplash.png
 icon.filename = %(source.dir)s/assets/icon.png
-android.presplash_color = #F4F1E8
+android.presplash_color = #F2F4EE
 
 # (list) Supported orientations
 orientation = portrait

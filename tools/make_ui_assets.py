@@ -249,10 +249,14 @@ def _fonts():
         return None, None
 
 
+SPLASH_BG = (0xF2, 0xF4, 0xEE)   # = ui/theme.py SPLASH_BG y android.presplash_color
+
+
 def make_presplash():
-    """Igual a la pantalla de inicio de la app, para una transición imperceptible."""
-    w, h = 1080, 1920
-    bg = Image.open(os.path.join(OUT, "background.jpg")).resize((w, h)).convert("RGBA")
+    """Idéntica a <SplashScreen>: fondo liso y proporción de teléfono actual (≈20:9), para
+    que Android no la achique con franjas y se vea una sola pantalla de inicio."""
+    w, h = 1080, 2340
+    bg = Image.new("RGBA", (w, h), SPLASH_BG + (255,))
     # Mismas proporciones que <SplashScreen> (layout.kv): logo 62 % del ancho centrado
     # al 60 % de la altura, nombre al 33,5 % y firma al pie.
     side = int(w * .62)

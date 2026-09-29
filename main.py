@@ -80,7 +80,7 @@ class FenoRubusApp(MDApp):
         self.sm.add_widget(SplashScreen(name="splash"))
         self.home = None
         Window.bind(on_keyboard=self._on_keyboard)
-        Window.clearcolor = theme.c("#F3F7F2")
+        Window.clearcolor = theme.c(theme.SPLASH_BG)  # sin destello entre presplash e inicio
         # Fondo difuminado verde/frambuesa detrás de todas las pantallas translúcidas.
         root = FloatLayout()
         root.add_widget(Image(source=theme.BACKGROUND, fit_mode="fill"))

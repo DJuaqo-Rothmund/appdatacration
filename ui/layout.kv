@@ -214,7 +214,7 @@
 # Pantalla de inicio
 # ---------------------------------------------------------------------------
 <SplashScreen>:
-    md_bg_color: 0, 0, 0, 0
+    md_bg_color: c(theme.SPLASH_BG)
     FloatLayout:
         AnchorLayout:
             anchor_y: "center"
@@ -230,7 +230,6 @@
         MDLabel:
             id: name
             text: "PhenoRubus"
-            opacity: 0
             halign: "center"
             font_style: "H4"
             bold: True
@@ -242,7 +241,6 @@
         MDLabel:
             id: byline
             text: "By DJuaqo, potenciado con Claude AI"
-            opacity: 0
             halign: "center"
             font_style: "Caption"
             theme_text_color: "Custom"
