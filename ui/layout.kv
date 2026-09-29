@@ -227,17 +227,13 @@
                 size_hint: .62, .62
                 fit_mode: "contain"
                 mipmap: True
-        MDLabel:
+        Image:
             id: name
-            text: "PhenoRubus"
-            halign: "center"
-            font_style: "H4"
-            bold: True
-            theme_text_color: "Custom"
-            text_color: c(theme.LEAF_DARK)
-            size_hint: 1, None
-            height: dp(56)
-            pos_hint: {"center_x": .5, "center_y": .335}
+            source: theme.WORDMARK
+            fit_mode: "contain"
+            mipmap: True
+            size_hint: .78, .14
+            pos_hint: {"center_x": .5, "center_y": .36}
         MDLabel:
             id: byline
             text: "By DJuaqo, potenciado con Claude AI"

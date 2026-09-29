@@ -222,6 +222,9 @@ APP_TITLE = "PhenoRubus"
 BYLINE = "By DJuaqo, potenciado con Claude AI"
 
 
+SPLASH_BG = (0xF2, 0xF4, 0xEE)   # = ui/theme.py SPLASH_BG y android.presplash_color
+
+
 def load_logo(size: int) -> Image.Image:
     """Logo oficial (frambuesa-reloj con ciclo fenológico) centrado en un cuadrado."""
     src = Image.open(LOGO_SRC).convert("RGBA")
@@ -234,10 +237,37 @@ def load_logo(size: int) -> Image.Image:
 
 def make_logo_assets():
     load_logo(512).save(os.path.join(OUT, "logo.png"))           # pantalla de inicio
-    icon = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    logo = load_logo(472)
-    icon.alpha_composite(logo, ((512 - 472) // 2, (512 - 472) // 2))
+    # Ícono: logo sobre un círculo claro (se ve igual en fondos de pantalla oscuros o claros).
+    size = 512
+    icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    disc = Image.new("RGBA", (size, size), SPLASH_BG + (255,))
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    icon.paste(disc, (0, 0), mask)
+    inner = int(size * .86)
+    icon.alpha_composite(load_logo(inner), ((size - inner) // 2, (size - inner) // 2))
     icon.save(os.path.join(ROOT, "assets", "icon.png"))
+
+
+WORDMARK_SRC = os.path.join(ROOT, "assets", "wordmark_source.png")
+WORDMARK_TOP, WORDMARK_BOTTOM = (0xA8, 0x18, 0x4A), (0x1E, 0x4A, 0x3A)   # frambuesa → verde
+
+
+def make_wordmark():
+    """Letra «PhenoRubus App» (trazo negro del original) recoloreada con un degradé
+    vertical frambuesa → verde hoja; fondo transparente, ampliada para pantallas densas."""
+    import numpy as np
+    src = Image.open(WORDMARK_SRC).convert("RGBA")
+    src = src.crop(src.getbbox())
+    w = 1400
+    src = src.resize((w, round(src.height * w / src.width)), Image.LANCZOS)
+    a = np.asarray(src).astype(float)
+    lum = a[..., :3].mean(axis=2, keepdims=True) / 255.0     # 0 = trazo, 1 = claro
+    t = np.linspace(0, 1, a.shape[0])[:, None, None]
+    ink = np.array(WORDMARK_TOP) * (1 - t) + np.array(WORDMARK_BOTTOM) * t
+    rgb = ink * (1 - lum) + 255 * lum
+    out = np.dstack([rgb[..., 0], rgb[..., 1], rgb[..., 2], a[..., 3]]).clip(0, 255).astype("uint8")
+    Image.fromarray(out, "RGBA").save(os.path.join(OUT, "wordmark.png"))
 
 
 def _fonts():
@@ -247,9 +277,6 @@ def _fonts():
                 ImageFont.truetype(os.path.join(fonts, "Roboto-Regular.ttf"), 34))
     except OSError:
         return None, None
-
-
-SPLASH_BG = (0xF2, 0xF4, 0xEE)   # = ui/theme.py SPLASH_BG y android.presplash_color
 
 
 def make_presplash():
@@ -263,9 +290,13 @@ def make_presplash():
     logo = load_logo(side)
     cy = int(h * (1 - .60))
     bg.alpha_composite(logo, ((w - side) // 2, cy - side // 2))
+    # Letra «PhenoRubus App»: 78 % del ancho, centrada al 36 % de la altura (= layout.kv).
+    wm = Image.open(os.path.join(OUT, "wordmark.png")).convert("RGBA")
+    ww = int(w * .78)
+    wm = wm.resize((ww, round(wm.height * ww / wm.width)), Image.LANCZOS)
+    bg.alpha_composite(wm, ((w - ww) // 2, int(h * (1 - .36)) - wm.height // 2))
     d = ImageDraw.Draw(bg)
-    f1, f2 = _fonts()
-    d.text((w // 2, int(h * (1 - .335))), APP_TITLE, fill=(30, 74, 58), anchor="mm", font=f1)
+    _f1, f2 = _fonts()
     d.text((w // 2, int(h * (1 - .04)) - 40), BYLINE, fill=(110, 126, 117), anchor="mm", font=f2)
     bg.convert("RGB").save(os.path.join(ROOT, "assets", "presplash.png"))
 
@@ -276,5 +307,6 @@ if __name__ == "__main__":
     make_background()
     make_mind_background()
     make_logo_assets()
+    make_wordmark()
     make_presplash()
     print("Recursos generados en", OUT)
