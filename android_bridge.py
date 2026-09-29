@@ -358,12 +358,6 @@ class AndroidMedia:
         self.public_uri(path, mime)
         return f"Descargas › {APP_NAME} › {os.path.basename(path)}"
 
-    def _installed(self, package: str) -> bool:
-        try:
-            return self.activity.getPackageManager().getLaunchIntentForPackage(package) is not None
-        except Exception:  # noqa: BLE001
-            return False
-
     def share(self, path: str, mime: str, title: str = "Compartir informe", target: str | None = None,
               subject: str = "", text: str = "") -> None:
         """target: None (todas las apps), "whatsapp" o "email"."""
@@ -378,12 +372,18 @@ class AndroidMedia:
             intent.putExtra(self.Intent.EXTRA_TEXT, String(text))
         intent.addFlags(self.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         if target == "whatsapp":
-            pkg = next((p for p in self.WHATSAPP_PACKAGES if self._installed(p)), None)
-            if pkg is None:
-                raise RuntimeError("WhatsApp no está instalado en este teléfono")
-            intent.setPackage(pkg)
-            self.activity.startActivity(intent)
-            return
+            # No se pregunta si está instalado: desde Android 11 la «visibilidad de paquetes»
+            # oculta las otras apps y la consulta dice «no instalado» aunque lo esté.
+            # Se intenta abrir directamente WhatsApp y luego WhatsApp Business.
+            for pkg in self.WHATSAPP_PACKAGES:
+                try:
+                    intent.setPackage(pkg)
+                    self.activity.startActivity(intent)
+                    return
+                except Exception:  # noqa: BLE001 (ActivityNotFoundException: probar el siguiente)
+                    continue
+            intent.setPackage(None)   # sin WhatsApp: menú general para elegir otra app
+            title = "WhatsApp no respondió: elija la app"
         if target == "email":
             # Solo apps de correo: el «selector» mailto: filtra el menú a Gmail, Outlook, etc.
             Uri = autoclass("android.net.Uri")
