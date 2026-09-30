@@ -365,7 +365,7 @@ class SamplingTab(MDBoxLayout):
         week = a.week
         start = _dt.date.fromisoformat(week["start_date"])
         end = start + _dt.timedelta(days=6)
-        self.ids.week_kicker.text = f"SEMANA {week['week_number']} · TEMPORADA {week['season']}-{week['season'] + 1}"
+        self.ids.week_kicker.text = ph.week_title(week).upper()
         self.ids.week_title.text = week["label"]
         self.ids.week_range.text = (f"{start.day} {ph.MESES[start.month - 1][:3]} – "
                                     f"{end.day} {ph.MESES[end.month - 1][:3]} {end.year}")
@@ -426,15 +426,15 @@ class SamplingTab(MDBoxLayout):
             return
         a.db.set_week_skipped(a.week["id"], active)
         a.week = a.db.get_week(a.week["id"])
-        a.toast(f"Semana {a.week['week_number']} marcada como no muestreada: no aparecerá en los informes"
-                if active else f"Semana {a.week['week_number']} vuelve a incluirse en los informes")
+        a.toast(f"{ph.week_title(a.week)} marcada como no muestreada: no aparecerá en los informes"
+                if active else f"{ph.week_title(a.week)} vuelve a incluirse en los informes")
         self.refresh()
 
     def shift_week(self, delta: int):
         a = app()
         n = a.week["week_number"] + delta
         if n < 1:
-            a.toast("La Semana 1 es la semana de referencia inicial.")
+            a.toast("Es la primera semana de muestreo de la temporada.")
             return
         a.week = a.db.ensure_week(a.week["season"], n)
         self.refresh()
@@ -592,7 +592,7 @@ class VarietiesTab(MDScreen):
     def refresh(self):
         a = app()
         season = a.season
-        self.ids.season_caption.text = (f"Temporada {season}-{season + 1} · toque una variedad "
+        self.ids.season_caption.text = (f"{ph.season_title(season)} · toque una variedad "
                                         f"para editar sus parámetros biométricos")
         box = self.ids.rows
         varieties = a.db.list_varieties()
@@ -692,7 +692,7 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
         self.ids.notes.text = v["notes"] or ""
         self.sector, self.irrigation = v["sector"] or 0, v["irrigation"] or 0
         self._sync_location_buttons()
-        self.ids.metrics_title.text = f"PARÁMETROS BIOMÉTRICOS · TEMPORADA {a.season}-{a.season + 1}"
+        self.ids.metrics_title.text = f"PARÁMETROS BIOMÉTRICOS · {ph.season_title(a.season).upper()}"
         m = a.db.get_metrics(variety_id, a.season)
         for k in self.METRICS:
             self.ids[k].text = "" if m[k] is None else f"{m[k]:g}"
@@ -848,8 +848,7 @@ class ObservationScreen(MDScreen):
         self.week = a.db.get_week(week_id)
         self.obs = a.db.get_or_create_observation(variety_id, week_id)
         self.ids.bar.title = self.variety["name"]
-        self.ids.week_caption.text = (f"Semana {self.week['week_number']} · {self.week['label']} · "
-                                      f"Temporada {self.week['season']}-{self.week['season'] + 1}")
+        self.ids.week_caption.text = f"{ph.week_title(self.week)} · {self.week['label']}"
         self._refresh_slot("canopy")
         self._refresh_slot("detail")
         self.ids.bbch.text = self.obs["bbch_label"] or (
@@ -1258,23 +1257,23 @@ class PreviewTab(MDScreen):
         fast_clear(box)
         if self.kind == "weekly":
             box.add_widget(self._param_button(
-                "calendar-week", f"Semana {self.sel_week['week_number']} · {self.sel_week['label']}",
+                "calendar-week", f"{ph.week_title(self.sel_week)} · {self.sel_week['label']}",
                 lambda b: self._pick_week(b, "week")))
         elif self.kind == "period":
             month = (f"{ph.MESES[self.sel_month[1] - 1].capitalize()} {self.sel_month[0]}"
                      if self.sel_month else "Elegir mes")
             box.add_widget(self._param_button("calendar-month", month, self._pick_month))
             row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
-            row.add_widget(self._param_button("ray-start", f"Desde S{self.sel_from['week_number']}",
+            row.add_widget(self._param_button("ray-start", f"Desde {ph.week_short(self.sel_from)}",
                                               lambda b: self._pick_week(b, "from")))
-            row.add_widget(self._param_button("ray-end", f"Hasta S{self.sel_to['week_number']}",
+            row.add_widget(self._param_button("ray-end", f"Hasta {ph.week_short(self.sel_to)}",
                                               lambda b: self._pick_week(b, "to")))
             box.add_widget(row)
         elif self.kind == "variety":
             name = self.sel_variety["name"] if self.sel_variety else "Sin variedades"
             box.add_widget(self._param_button("fruit-cherries", name, self._pick_variety))
         else:
-            box.add_widget(MDLabel(text=f"Toda la temporada {app().season}-{app().season + 1}",
+            box.add_widget(MDLabel(text=f"Toda la temporada · {ph.season_title(app().season)}",
                                    font_style="Caption", adaptive_height=True,
                                    theme_text_color="Custom", text_color=c(theme.MUTED)))
 
@@ -1290,7 +1289,7 @@ class PreviewTab(MDScreen):
                 self.sel_to, self.sel_month = w, None
             self.refresh()
 
-        pick_dialog("Semana de muestreo", [(f"Semana {w['week_number']}", w["label"], lambda w=w: choose(w))
+        pick_dialog("Semana de muestreo", [(ph.week_title(w), w["label"], lambda w=w: choose(w))
                                             for w in reversed(a.db.list_weeks(a.season))])
 
     def _pick_month(self, caller):
@@ -1433,9 +1432,9 @@ class ReportsTab(MDScreen):
 
     def _labels(self):
         ids = self.ids
-        ids.week_btn.text = f"Semana {self.sel_week['week_number']} · {self.sel_week['label']}"
-        ids.from_btn.text = f"Desde S{self.sel_from['week_number']}"
-        ids.to_btn.text = f"Hasta S{self.sel_to['week_number']}"
+        ids.week_btn.text = f"{ph.week_title(self.sel_week)} · {self.sel_week['label']}"
+        ids.from_btn.text = f"Desde {ph.week_short(self.sel_from)}"
+        ids.to_btn.text = f"Hasta {ph.week_short(self.sel_to)}"
         ids.month_btn.text = (f"Mes: {ph.MESES[self.sel_month[1] - 1].capitalize()} {self.sel_month[0]}"
                               if self.sel_month else "Elegir mes (o rango abajo)")
         ids.variety_btn.text = self.sel_variety["name"] if self.sel_variety else "Sin variedades"
@@ -1453,7 +1452,7 @@ class ReportsTab(MDScreen):
                 self.sel_to, self.sel_month = w, None
             self._labels()
 
-        pick_dialog("Semana de muestreo", [(f"Semana {w['week_number']}", w["label"], lambda w=w: choose(w))
+        pick_dialog("Semana de muestreo", [(ph.week_title(w), w["label"], lambda w=w: choose(w))
                                             for w in reversed(weeks)])
 
     def pick_month(self, caller):
@@ -1543,9 +1542,9 @@ class SettingsTab(MDScreen):
                 text_color=c(theme.WARN), line_color=c(theme.WARN),
                 on_release=lambda *_: request_exact_alarm_permission()))
         start = a.db.season_start(a.season)
-        self.ids.season_text.text = (f"Temporada {a.season}-{a.season + 1} · semana en curso: "
-                                     f"Semana {a.week['week_number']} ({a.week['label']})")
-        self.ids.start_btn.text = f"Semana 1: semana del {ph.format_date_es(start)}"
+        self.ids.season_text.text = (f"{ph.season_title(a.season)} · semana en curso: "
+                                     f"{ph.week_title(a.week)} ({a.week['label']})")
+        self.ids.start_btn.text = f"Primera semana de muestreo: {ph.format_date_es(start)}"
         n = sum(a.db.reference_counts().values())
         # Sin instanciar el clasificador (evita cargar numpy solo por abrir Ajustes).
         ext = a.__dict__.get("classifier")
@@ -1721,12 +1720,12 @@ class SettingsTab(MDScreen):
             a.season = season
             a.week = a.db.current_week()
             self.refresh()
-            a.toast(f"Semana 1 = semana del {ph.format_date_es(value)}")
+            a.toast(f"Primera semana de muestreo: {ph.format_date_es(value)}")
 
         if n:
             confirm("Cambiar la semana de inicio",
-                    f"Hay {n} registro(s) en la temporada. Conservarán su número de semana "
-                    f"(p. ej. «Semana 3»), pero sus fechas y etiquetas se recalcularán desde el "
+                    f"Hay {n} registro(s) en la temporada. Conservarán su orden (1.ª, 2.ª, 3.ª "
+                    f"semana de muestreo…), pero sus fechas y semanas del año se recalcularán desde el "
                     f"{ph.format_date_es(value)}.", [("Cambiar", apply)])
         else:
             apply()
@@ -1983,7 +1982,7 @@ class AILabScreen(MDScreen):
         names = app().db.bbch_names()
         card = _mind("MindCard")
         card.add_widget(_mind("MindSection", text="¿QUÉ ESTADO ES?"))
-        card.add_widget(_mind("MindMuted", text=f"{p['variety']} · semana {p['week']}"
+        card.add_widget(_mind("MindMuted", text=f"{p['variety']} · {p['week']}"
                                                 + ("" if p.get("truth") is not None
                                                    else " · foto sin estado: tu respuesta la etiqueta")))
         img = MDBoxLayout(size_hint_y=None, height=dp(230))
@@ -2122,7 +2121,7 @@ class AILabScreen(MDScreen):
         for p in photos[:limit]:
             code = p["bbch_code"]
             row = LabelPhotoRow(
-                title=f"{p['variety_name']} · S{p['week_number']}",
+                title=f"{p['variety_name']} · {ph.week_short(p)}",
                 subtitle=(f"BBCH {code:02d}" if code is not None else "Sin estado")
                 + f" · {p['week_label']}", in_reference=bool(p["in_reference"]), photo=p)
             row.ids.thumb_box.add_widget(thumb_widget(p["path"]))

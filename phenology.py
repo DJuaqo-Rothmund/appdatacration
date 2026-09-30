@@ -196,7 +196,39 @@ class SamplingWeek:
 
     @property
     def long_label(self) -> str:
-        return f"Semana {self.number} · {self.label}"
+        return f"{week_title(self.start)} · {self.label}"
+
+
+def iso_week(start) -> tuple[int, int]:
+    """(semana del año ISO-8601, año) de una fecha o «aaaa-mm-dd».
+    10-08-2026 -> (33, 2026); 28-12-2026 -> (53, 2026); 04-01-2027 -> (1, 2027)."""
+    d = start if isinstance(start, _dt.date) else _dt.date.fromisoformat(str(start)[:10])
+    year, week, _ = d.isocalendar()
+    return week, year
+
+
+def _week_date(week):
+    return week["start_date"] if isinstance(week, dict) else week
+
+
+def week_title(week) -> str:
+    """«Semana 33, año 2026» a partir de una semana de muestreo (o su fecha de inicio)."""
+    w, y = iso_week(_week_date(week))
+    return f"Semana {w}, año {y}"
+
+
+def week_short(week) -> str:
+    """«S33»: rótulo corto (ejes de gráficos, rangos)."""
+    return f"S{iso_week(_week_date(week))[0]}"
+
+
+def week_of_year(week) -> int:
+    return iso_week(_week_date(week))[0]
+
+
+def season_title(season: int) -> str:
+    """Rótulo de una temporada completa: «Año 2026»."""
+    return f"Año {season}"
 
 
 def week_start(season_start: _dt.date, number: int) -> _dt.date:

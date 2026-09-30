@@ -175,7 +175,7 @@ def test_preview_mode_and_summary(db, tmp_path):
     sm = report_summary(db, "weekly", season, week_id=w["id"])
     assert sm["cells"] == 10 and sm["photos"] == 1 and sm["complete"] == 0
     # Fotos opcionales: con una sola (detalle) solo falta el estado; sin fotos, «fotos».
-    assert any("Código 11 · S1: falta estado BBCH" == m for m in sm["missing"])
+    assert any(f"Código 11 · S{ph.week_of_year(w)}: falta estado BBCH" == m for m in sm["missing"])
     assert any(m.endswith(": falta fotos, estado BBCH") for m in sm["missing"])
     assert sm["photos_expected"] == 10 and sm["missing_photos"] == 9
     db.update_observation(obs["id"], bbch_code=65, bbch_label="BBCH 65")
@@ -355,9 +355,10 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
     st = drive.status()
     assert st["done"] == 2 and st["pending"] == 0 and st["last_sync"]
     names = [m["name"] for m in folders.values()]
-    assert ROOT_FOLDER in names and f"Temporada {week['season']}-{week['season'] + 1}" in names
     start = dt.date.fromisoformat(week["start_date"])
-    week_dir = f"Semana {week['week_number']:02d} · {start:%d-%m-%Y}"
+    iso_w, iso_y = start.isocalendar()[1], start.isocalendar()[0]
+    assert ROOT_FOLDER in names and f"Año {iso_y}" in names
+    week_dir = f"Semana {iso_w:02d} · {start:%d-%m-%Y}"
     assert week_dir in names                      # carpeta por semana de muestreo
     wk = next(fid for fid, m in folders.items() if m["name"] == week_dir)
     assert any(f'"parents": ["{wk}"]'.encode() in body for body in files.values())
@@ -366,8 +367,9 @@ def test_drive_backup_queue_with_fake_api(db, tmp_path):
     rep = ReportGenerator(db, str(tmp_path / "out"))
     weekly_path = rep.weekly(week["id"]).path
     remote = drive.enqueue_report(weekly_path, flush=False)   # sin hilos: prueba determinista
-    assert remote == f"Temporada {week['season']}-{week['season'] + 1}/{week_dir}/{os.path.basename(weekly_path)}"
-    other = tmp_path / f"matriz_T{week['season']}.html"
+    assert os.path.basename(weekly_path).startswith(f"semanal_{iso_y}_S{iso_w:02d}")
+    assert remote == f"Año {iso_y}/{week_dir}/{os.path.basename(weekly_path)}"
+    other = tmp_path / f"matriz_{week['season']}.html"
     other.write_text("<html></html>", encoding="utf-8")
     assert drive.enqueue_report(str(other), flush=False).endswith(f"/Informes/{other.name}")
     assert drive.flush() == 2 and drive.status()["pending"] == 0
@@ -679,7 +681,7 @@ def test_skipped_week_excluded_from_reports(db, tmp_path):
     html = open(rep.period(season, 1, 3).path, encoding="utf-8").read()
     import re
     heads = re.findall(r'<th class="w"[^>]*>(S\d+)</th>', html)   # columnas de la tabla
-    assert heads == ["S1", "S3"]
+    assert heads == ["S37", "S39"]                                 # semana del año
     db.set_week_skipped(ws[1]["id"], False)
     assert len(db.list_weeks(season, include_skipped=False)) == 3
 
@@ -700,3 +702,12 @@ def test_each_phone_keeps_its_own_configuration(tmp_path):
     assert d.get_variety(d.list_varieties()[0]["id"])["sector"] == 3
     assert d.get_setting("reminder") == {"weekday": 2}
     d.close()
+
+
+def test_week_of_year_titles():
+    # Semana del año ISO-8601 y año calendario: «Semana xx, año 202x».
+    assert ph.week_title("2026-08-10") == "Semana 33, año 2026"
+    assert ph.week_title("2026-09-07") == "Semana 37, año 2026"
+    assert ph.week_title("2026-12-28") == "Semana 53, año 2026"
+    assert ph.week_title("2027-01-04") == "Semana 1, año 2027"
+    assert ph.week_short({"start_date": "2026-09-28"}) == "S40"

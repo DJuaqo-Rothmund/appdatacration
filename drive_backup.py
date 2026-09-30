@@ -5,7 +5,7 @@ Respaldo de fotos en Google Drive (además de la copia en el teléfono).
 
 * Cada foto nueva se encola en `drive_queue` (SQLite): el respaldo funciona sin
   conexión y se sube en cuanto hay red (reintentos con límite).
-* Carpeta en «Mi unidad»:  PhenoRubus · Imágenes de Fenología / Temporada 2026-2027 / …
+* Carpeta en «Mi unidad»:  PhenoRubus · Imágenes de Fenología / Año 2026 / Semana 37 · 07-09-2026 / …
 * Permiso mínimo `drive.file`: la app solo ve los archivos que ella misma creó.
 * Android: autorización con Google Identity Services (AuthorizationClient de
   play-services-auth); la subida usa la API REST v3 con urllib (sin librerías extra).
@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import phenology as ph
 from platform_utils import IS_ANDROID
 
 SCOPE = "https://www.googleapis.com/auth/drive.file"
@@ -363,41 +364,53 @@ class DriveBackup:
 
     # ------------------------------------------------------------- cola
     @staticmethod
-    def week_folder(season: int, week_number: int, start_date: str) -> str:
-        """«Temporada 2026-2027/Semana 04 · 28-09-2026» (el número ordena las carpetas)."""
+    def week_folder(start_date: str) -> str:
+        """«Año 2026/Semana 40 · 28-09-2026»: semana del año ISO (el número ordena las carpetas)."""
         d = _dt.date.fromisoformat(str(start_date)[:10])
-        return f"Temporada {season}-{season + 1}/Semana {week_number:02d} · {d:%d-%m-%Y}"
+        week, year = ph.iso_week(d)
+        return f"Año {year}/Semana {week:02d} · {d:%d-%m-%Y}"
 
     def _remote_name(self, photo_id: int | None, path: str) -> str:
         """Carpeta de la SEMANA de muestreo de la foto + nombre del archivo."""
         row = None
         if photo_id is not None:
             row = self.db.query_one(
-                "SELECT w.season, w.week_number, w.start_date FROM photos p "
+                "SELECT w.start_date FROM photos p "
                 "JOIN observations o ON o.id = p.observation_id "
                 "JOIN sampling_weeks w ON w.id = o.week_id WHERE p.id = ?", (photo_id,))
         base = os.path.basename(path)
         if row:
-            return f"{self.week_folder(row['season'], row['week_number'], row['start_date'])}/{base}"
+            return f"{self.week_folder(row['start_date'])}/{base}"
         return base
 
     def enqueue_report(self, path: str, flush: bool = True) -> str:
         """Sube un informe: los semanales van a la carpeta de su semana; el resto a
-        «Temporada …/Informes». Devuelve la ruta en Drive."""
+        «Año …/Informes». Devuelve la ruta en Drive."""
         import re
         base = os.path.basename(path)
-        m = re.match(r"semanal_T(\d{4})_S(\d+)", base)
         remote = None
+        m = re.match(r"semanal_(\d{4})_S(\d+)", base)          # semanal_2026_S37 (semana del año)
+        old = re.match(r"semanal_T(\d{4})_S(\d+)", base)       # formato anterior (n.º de muestreo)
         if m:
-            season, number = int(m[1]), int(m[2])
+            try:
+                start = _dt.date.fromisocalendar(int(m[1]), int(m[2]), 1)
+            except ValueError:
+                start = None
+            if start:
+                w = self.db.query_one(
+                    "SELECT start_date FROM sampling_weeks WHERE start_date BETWEEN ? AND ? "
+                    "ORDER BY start_date LIMIT 1",
+                    (start.isoformat(), (start + _dt.timedelta(days=6)).isoformat()))
+                remote = f"{self.week_folder(w['start_date'] if w else start.isoformat())}/{base}"
+        elif old:
             w = self.db.query_one("SELECT start_date FROM sampling_weeks WHERE season=? AND week_number=?",
-                                  (season, number))
+                                  (int(old[1]), int(old[2])))
             if w:
-                remote = f"{self.week_folder(season, number, w['start_date'])}/{base}"
+                remote = f"{self.week_folder(w['start_date'])}/{base}"
         if remote is None:
-            t = re.search(r"_T(\d{4})", base)
-            season = int(t[1]) if t else _dt.date.today().year
-            remote = f"Temporada {season}-{season + 1}/Informes/{base}"
+            t = re.search(r"_T?(\d{4})(?=[_.-]|$)", base)
+            year = int(t[1]) if t else _dt.date.today().year
+            remote = f"Año {year}/Informes/{base}"
         self.enqueue(None, path, remote=remote, flush=flush)
         return remote
 

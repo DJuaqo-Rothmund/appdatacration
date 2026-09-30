@@ -43,14 +43,14 @@
 <div class="scroll-x">
 <table class="heat">
   <thead><tr><th class="name">Variedad</th>
-  {% for w in weeks %}<th class="w" title="{{ w.label }}">S{{ w.week_number }}</th>{% endfor %}</tr></thead>
+  {% for w in weeks %}<th class="w" title="{{ w.label }}">{{ w|wks }}</th>{% endfor %}</tr></thead>
   <tbody>
   {% for r in heat %}
   <tr><td class="name">{{ r.variety.name }}</td>
     {% for c in r.cells %}
       {% if c.code is not none %}{% set col = c.code|seq %}
-      <td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ r.variety.name }} · Semana {{ c.week.week_number }} ({{ c.week.label }}) · {{ c.code|bbch }}">{{ '%02d'|format(c.code) }}</td>
-      {% else %}<td class="c na" title="{{ r.variety.name }} · Semana {{ c.week.week_number }} · sin registro">·</td>{% endif %}
+      <td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ r.variety.name }} · {{ c.week|wk }} ({{ c.week.label }}) · {{ c.code|bbch }}">{{ '%02d'|format(c.code) }}</td>
+      {% else %}<td class="c na" title="{{ r.variety.name }} · {{ c.week|wk }} · sin registro">·</td>{% endif %}
     {% endfor %}
   </tr>
   {% endfor %}
@@ -116,7 +116,7 @@
     var xv = data.pl + (wk - data.wmin) / (data.wmax - data.wmin) * data.w;
     xh.setAttribute("x1", xv); xh.setAttribute("x2", xv); xh.style.opacity = 1;
     tip.textContent = "";
-    var head = document.createElement("div"); head.className = "t-h"; head.textContent = "Semana " + wk; tip.appendChild(head);
+    var head = document.createElement("div"); head.className = "t-h"; head.textContent = "Semana " + ((data.labels || {})[String(wk)] || wk); tip.appendChild(head);
     var ids = Object.keys(slots);
     if (!ids.length) ids = Object.keys(data.series);
     ids.forEach(function (id) {

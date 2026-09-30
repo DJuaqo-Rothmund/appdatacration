@@ -636,7 +636,7 @@ class Database:
     def list_detail_photos(self, season: int | None = None) -> list[dict]:
         """Fotos de detalle con su BBCH asignado (para etiquetado en la calibración)."""
         sql = ("SELECT p.*, o.bbch_code, o.variety_id, v.name AS variety_name, "
-               "w.week_number, w.label AS week_label, w.season, "
+               "w.week_number, w.start_date, w.label AS week_label, w.season, "
                "(SELECT COUNT(*) FROM ai_references r WHERE r.photo_id = p.id) AS in_reference "
                "FROM photos p JOIN observations o ON o.id = p.observation_id "
                "JOIN varieties v ON v.id = o.variety_id "

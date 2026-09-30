@@ -26,10 +26,10 @@
   <div class="strip">
     {% for t in s.tiles %}
     <div class="tile" title="{{ t.week.label }}{% if t.notes %} — {{ t.notes }}{% endif %}">
-      {% if t.img.detail %}<img src="{{ t.img.detail }}" alt="Detalle semana {{ t.week.week_number }}" loading="lazy">
-      {% elif t.img.canopy %}<img src="{{ t.img.canopy }}" alt="Canopia semana {{ t.week.week_number }}" loading="lazy">
+      {% if t.img.detail %}<img src="{{ t.img.detail }}" alt="Detalle {{ t.week|wk }}" loading="lazy">
+      {% elif t.img.canopy %}<img src="{{ t.img.canopy }}" alt="Canopia {{ t.week|wk }}" loading="lazy">
       {% else %}<div class="nophoto">Sin foto</div>{% endif %}
-      <div class="t">S{{ t.week.week_number }} · {{ t.week.label|replace('Semana del ', '') }}</div>
+      <div class="t">{{ t.week|wks }} · {{ t.week.label|replace('Semana del ', '') }}</div>
       <div class="b">{% if t.code is not none %}BBCH {{ '%02d'|format(t.code) }}{% else %}<span class="muted">—</span>{% endif %}</div>
     </div>
     {% endfor %}

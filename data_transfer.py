@@ -428,12 +428,21 @@ def import_reports(db, paths: list[str], progress=None) -> ReportImport:
         parser = _WeeklyParser()
         parser.feed(html)
         wk = re.search(r"Semana\s+(\d+)", parser.h1)
-        season = re.search(r"Temporada\s+(\d{4})", parser.sub)
-        if "semanal" not in parser.h1.lower() or not wk or not season or not parser.cards:
+        year = re.search(r"año\s+(\d{4})", parser.h1, flags=re.I)      # «Semana 37, año 2026»
+        season = re.search(r"Temporada\s+(\d{4})", parser.sub)         # formato anterior
+        week = None
+        if "semanal" in parser.h1.lower() and wk and parser.cards:
+            if year:
+                try:   # domingo de esa semana ISO: siempre cae dentro de la semana de muestreo
+                    week = db.week_for_date(_dt.date.fromisocalendar(int(year[1]), int(wk[1]), 7))
+                except ValueError:
+                    week = None
+            elif season:
+                week = db.ensure_week(int(season[1]), int(wk[1]))
+        if week is None:
             res.skipped.append(f"{name}: no es un informe semanal")
             continue
         res.reports += 1
-        week = db.ensure_week(int(season[1]), int(wk[1]))
         for card in parser.cards:
             vname = card["name"].strip()
             if not vname:

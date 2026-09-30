@@ -348,7 +348,7 @@
                         SectionLabel:
                             id: week_kicker
                             halign: "center"
-                            text: "SEMANA 1"
+                            text: "SEMANA"
                         MDLabel:
                             id: week_title
                             text: "Semana del 7 de septiembre"
@@ -754,14 +754,14 @@
                 GhostButton:
                     id: start_btn
                     icon: "calendar-start"
-                    text: "Semana 1"
+                    text: "Primera semana de muestreo"
                     on_release: root.pick_start()
                 GhostButton:
                     icon: "calendar-refresh"
                     text: "Restablecer: semana del 7 de septiembre"
                     on_release: root.reset_start()
                 Muted:
-                    text: "Elija cualquier fecha como Semana 1; las siguientes se generan cada 7 días («Semana del 14 de…», «Semana del 21 de…»). Por defecto: semana del 7 de septiembre."
+                    text: "Elija la fecha de la primera semana de muestreo; las siguientes se generan cada 7 días. Cada semana se identifica por su número en el año (p. ej. «Semana 37, año 2026»). Por defecto: semana del 7 de septiembre."
             PaperCard:
                 SectionLabel:
                     text: "FOTOS EN EL TELÉFONO"

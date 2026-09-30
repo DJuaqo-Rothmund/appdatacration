@@ -119,7 +119,7 @@ class DailyChallenge:
         options = sorted(options[:4])
         return ("identify", {"photo_id": photo["id"], "path": photo["path"], "truth": truth,
                              "ai": ai[0] if ai else None, "options": options,
-                             "variety": photo["variety_name"], "week": photo["week_number"]})
+                             "variety": photo["variety_name"], "week": ph.week_title(photo)})
 
     def _target_codes(self, week_number: int, n: int, rnd: random.Random) -> list[int]:
         counts = self.db.reference_counts()

@@ -143,7 +143,7 @@ def reminder_text(db, today: _dt.date | None = None) -> tuple[str, str]:
         if len(photos) < 2 or not obs or obs["bbch_code"] is None:
             pending += 1
     title = "Muestreo fenológico · frambueso"
-    body = (f"Semana {week['week_number']} ({week['label']}): "
+    body = (f"{ph.week_title(week)} ({week['label']}): "
             f"{pending} variedad(es) con registro pendiente.")
     return title, body
 
