@@ -97,8 +97,11 @@ android.gradle_dependencies = com.google.android.gms:play-services-auth:21.2.0
 # (bool) Enable AndroidX support
 android.enable_androidx = True
 
-# (bool) Allow backup (datos de campo): se permite el respaldo automático de Android.
-android.allow_backup = True
+# (bool) Respaldo automático de Android DESACTIVADO: cada teléfono conserva su propia
+# configuración (variedades, ajustes, registros). Con él activo, al instalar la app en
+# otro teléfono con la misma cuenta de Google, Android copiaba los datos del primero.
+# Los respaldos de la app (Google Drive y copia ZIP en Descargas) no se ven afectados.
+android.allow_backup = False
 
 # (str) Bootstrap
 p4a.bootstrap = sdl2

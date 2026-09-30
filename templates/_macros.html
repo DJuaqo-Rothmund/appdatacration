@@ -7,6 +7,16 @@
 {%- endif %}
 {%- endmacro %}
 
+{% macro photo_pair(img) -%}
+{# Fotos opcionales: se muestran las que haya (canopia y/o detalle), sin casillas vacías. #}
+{% set n = (1 if img.canopy else 0) + (1 if img.detail else 0) %}
+{% if n == 0 %}<div class="photos one"><figure><div class="nophoto">Sin fotos</div></figure></div>
+{% else %}<div class="photos{{ ' one' if n == 1 else '' }}">
+  {% if img.canopy %}{{ photo(img.canopy, "Canopia") }}{% endif %}
+  {% if img.detail %}{{ photo(img.detail, "Detalle") }}{% endif %}
+</div>{% endif %}
+{%- endmacro %}
+
 {% macro photo(src, caption) -%}
 <figure>
   {% if src %}<img src="{{ src }}" alt="{{ caption }}" loading="lazy">{% else %}<div class="nophoto">Sin foto</div>{% endif %}

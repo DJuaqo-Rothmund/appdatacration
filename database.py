@@ -264,6 +264,7 @@ class Database:
         "varieties": [("sector", "INTEGER"), ("irrigation", "INTEGER")],
         "observations": [("latitude", "REAL"), ("longitude", "REAL"),
                          ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
+        "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
     }
 
     def _add_missing_columns(self) -> None:
@@ -502,9 +503,17 @@ class Database:
             self.ensure_week(season, n)
         return self.list_weeks(season)
 
-    def list_weeks(self, season: int) -> list[dict]:
-        return self.query(
-            "SELECT * FROM sampling_weeks WHERE season=? ORDER BY week_number", (season,))
+    def list_weeks(self, season: int, include_skipped: bool = True) -> list[dict]:
+        """Semanas de la temporada. include_skipped=False quita las marcadas como
+        «no muestreada» (los informes de varias semanas no las muestran)."""
+        sql = "SELECT * FROM sampling_weeks WHERE season=?"
+        if not include_skipped:
+            sql += " AND COALESCE(skipped, 0) = 0"
+        return self.query(sql + " ORDER BY week_number", (season,))
+
+    def set_week_skipped(self, week_id: int, skipped: bool) -> None:
+        self.execute("UPDATE sampling_weeks SET skipped=? WHERE id=?", (int(bool(skipped)), week_id))
+        self.log("update", "week", week_id, "omitida" if skipped else "incluida")
 
     def get_week(self, week_id: int) -> dict | None:
         return self.query_one("SELECT * FROM sampling_weeks WHERE id=?", (week_id,))
@@ -652,7 +661,8 @@ class Database:
         rows = self.query(
             "SELECT o.*, w.week_number, w.start_date, w.label AS week_label "
             "FROM observations o JOIN sampling_weeks w ON w.id=o.week_id "
-            "WHERE o.variety_id=? AND w.season=? ORDER BY w.week_number",
+            "WHERE o.variety_id=? AND w.season=? AND COALESCE(w.skipped, 0) = 0 "
+            "ORDER BY w.week_number",
             (variety_id, season))
         for r in rows:
             r["photos"] = self.get_photos(r["id"])

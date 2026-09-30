@@ -382,12 +382,32 @@
                         size_hint_x: None
                         width: dp(96)
                         halign: "right"
-                MDFlatButton:
-                    text: "Ir a la semana actual"
-                    theme_text_color: "Custom"
-                    text_color: c(theme.LEAF_DARK)
-                    pos_hint: {"center_x": .5}
-                    on_release: root.go_current()
+                MDBoxLayout:
+                    adaptive_height: True
+                    padding: dp(4), 0, dp(8), 0
+                    spacing: dp(2)
+                    MDFlatButton:
+                        text: "Ir a la semana actual"
+                        theme_text_color: "Custom"
+                        text_color: c(theme.LEAF_DARK)
+                        pos_hint: {"center_y": .5}
+                        on_release: root.go_current()
+                    Widget:
+                    MDCheckbox:
+                        id: skip_box
+                        size_hint: None, None
+                        size: dp(36), dp(36)
+                        pos_hint: {"center_y": .5}
+                        color_active: c(theme.BERRY)
+                        color_inactive: c(theme.MUTED)
+                        on_active: root.set_skipped(self.active)
+                    MDLabel:
+                        text: "No muestreada"
+                        font_style: "Caption"
+                        adaptive_size: True
+                        pos_hint: {"center_y": .5}
+                        theme_text_color: "Custom"
+                        text_color: c(theme.INK)
             SectionLabel:
                 text: "VARIEDADES · toque para registrar"
             MDBoxLayout:
@@ -439,8 +459,8 @@
         pos_hint: {"center_y": .5}
         Tag:
             text: root.photo_tag
-            bg: c(theme.LEAF_SOFT) if root.photos == 2 else c(theme.BERRY_SOFT)
-            fg: c(theme.LEAF_DARK) if root.photos == 2 else c(theme.LEAF_DARK)
+            bg: c(theme.LEAF_SOFT) if root.photos >= 1 else c(theme.BERRY_SOFT)
+            fg: c(theme.LEAF_DARK)
             pos_hint: {"right": 1}
         Tag:
             text: root.code_tag

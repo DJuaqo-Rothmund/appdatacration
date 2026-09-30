@@ -386,7 +386,7 @@ class ReportGenerator:
         if week_to < week_from:
             week_from, week_to = week_to, week_from
         self.db.ensure_weeks(season, week_to)
-        weeks = [w for w in self.db.list_weeks(season) if week_from <= w["week_number"] <= week_to]
+        weeks = [w for w in self.db.list_weeks(season, include_skipped=False) if week_from <= w["week_number"] <= week_to]
         varieties = self.db.list_varieties()
         images = self._images(package, max_side=480)
         heat = self._heatmap(season, weeks, varieties)
@@ -412,7 +412,7 @@ class ReportGenerator:
                      f"Temporada {season}-{season + 1}")
 
     def monthly(self, season: int, year: int, month: int, package: str = "html") -> ReportResult:
-        weeks = [w for w in self.db.list_weeks(season)
+        weeks = [w for w in self.db.list_weeks(season, include_skipped=False)
                  if (d := _dt.date.fromisoformat(w["start_date"])).year == year and d.month == month]
         if not weeks:
             raise ValueError("No hay semanas de muestreo que comiencen en ese mes.")
@@ -439,7 +439,7 @@ class ReportGenerator:
             milestones.append({"code": code, "name": name, "week": hit[0] if hit else None})
         metrics = self.db.get_metrics(variety_id, season)
         custom = self.db.list_custom_fields(variety_id, season)
-        all_weeks = self.db.list_weeks(season)
+        all_weeks = self.db.list_weeks(season, include_skipped=False)
         compare = self._compare(self._heatmap(season, all_weeks, self.db.list_varieties()),
                                 all_weeks, [variety_id])
         title = f"Ficha fenológica · {v['name']}"
@@ -453,7 +453,7 @@ class ReportGenerator:
     # ------------------------------------------------ 4. matriz global
     def matrix(self, season: int, week_from: int | None = None, week_to: int | None = None,
                package: str = "html") -> ReportResult:
-        weeks = self.db.list_weeks(season)
+        weeks = self.db.list_weeks(season, include_skipped=False)
         if week_from is not None:
             weeks = [w for w in weeks if w["week_number"] >= week_from]
         if week_to is not None:
@@ -511,11 +511,11 @@ EST_KB_PER_PHOTO = 75   # JPEG ~960 px q72 embebido en Base64
 
 
 def _missing_items(obs, photos) -> list[str]:
+    """Lo que falta para dar el registro por completo: estado BBCH y AL MENOS una foto
+    (canopia o detalle; ninguna de las dos es obligatoria por separado)."""
     out = []
-    if "canopy" not in photos:
-        out.append("foto canopia")
-    if "detail" not in photos:
-        out.append("foto detalle")
+    if not photos:
+        out.append("fotos")
     if not obs or obs["bbch_code"] is None:
         out.append("estado BBCH")
     return out
@@ -526,7 +526,7 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
                    variety_id: int | None = None) -> dict:
     """Qué incluirá el informe y qué datos faltan (sin generar nada)."""
     varieties = db.list_varieties()
-    weeks = db.list_weeks(season)
+    weeks = db.list_weeks(season, include_skipped=(kind == "weekly"))
     if kind == "weekly":
         weeks = [w for w in weeks if w["id"] == week_id]
     elif kind == "period":
@@ -542,7 +542,7 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
             ph_ = db.get_photos(obs["id"]) if obs else {}
             cells += 1
             photos += len(ph_)
-            miss_photos += 2 - len(ph_)
+            miss_photos += 0 if ph_ else 1
             has_bbch = bool(obs and obs["bbch_code"] is not None)
             bbch += has_bbch
             notes += bool(obs and (obs["notes"] or "").strip())
@@ -554,7 +554,7 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
                 missing.append(f"{v['name']} · S{w['week_number']}: falta {', '.join(lack)}")
     total_missing = cells - complete
     return {"kind": kind, "varieties": len(varieties), "weeks": len(weeks), "cells": cells,
-            "complete": complete, "photos": photos, "photos_expected": cells * 2,
+            "complete": complete, "photos": photos, "photos_expected": cells,
             "bbch": bbch, "notes": notes, "missing": missing,
             "missing_more": max(0, total_missing - len(missing)),
             "missing_photos": miss_photos, "missing_bbch": cells - bbch,

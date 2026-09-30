@@ -126,6 +126,14 @@ class PickRow(GlassButton):
     title = StringProperty()
     subtitle = StringProperty()
     accent = ColorProperty(c(theme.LEAF_SOFT))
+    action = ObjectProperty(None, allownone=True)   # lo asigna la lista reciclable
+
+    def on_release(self, *_):
+        if self.action is not None:
+            self.action()
+
+
+_pick_open = None   # diálogo de selección abierto (evita abrir varios con toques repetidos)
 
 
 def pick_dialog(title: str, items: list[tuple], dark: bool = False):
@@ -133,28 +141,46 @@ def pick_dialog(title: str, items: list[tuple], dark: bool = False):
     Lista de selección en un diálogo CENTRADO y a lo ancho (reemplaza al menú
     desplegable, que se abría desplazado y cortaba los nombres largos).
     items: (título, subtítulo, callback) o (título, subtítulo, callback, color_acento).
-    """
-    from kivymd.uix.scrollview import MDScrollView
-    dialog = None
-    box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6),
-                      padding=(0, dp(4)))
-    for it in items:
-        head, sub, cb = it[0], it[1], it[2]
-        row = PickRow(title=head, subtitle=sub or "")
-        if len(it) > 3:
-            row.accent = it[3]
 
-        def run(_w, cb=cb):
+    Usa una lista RECICLABLE (RecycleView): solo se crean las filas visibles (~8) en vez
+    de todas (la escala BBCH tiene 34), así abre al instante también en teléfonos básicos.
+    """
+    global _pick_open
+    if _pick_open is not None:
+        return _pick_open
+    from kivy.uix.recycleboxlayout import RecycleBoxLayout
+    from kivy.uix.recycleview import RecycleView
+    dialog = None
+
+    def wrap(cb):
+        def run():
             dialog.dismiss()
             cb()
+        return run
 
-        row.bind(on_release=run)
-        box.add_widget(row)
-    sv = MDScrollView(size_hint_y=None, height=min(dp(440), dp(64) * len(items) + dp(8)),
-                      do_scroll_x=False)
-    sv.add_widget(box)
-    dialog = MDDialog(title=title, type="custom", content_cls=sv, md_bg_color=DIALOG_BG,
+    data = []
+    for it in items:
+        row = {"title": it[0], "subtitle": it[1] or "", "action": wrap(it[2])}
+        row["accent"] = it[3] if len(it) > 3 else c(theme.LEAF_SOFT)
+        data.append(row)
+    rv = RecycleView(size_hint_y=None, do_scroll_x=False, bar_width=dp(4),
+                     height=min(dp(440), dp(64) * len(items) + dp(8)))
+    layout = RecycleBoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6),
+                              padding=(0, dp(4)), default_size=(None, dp(58)),
+                              default_size_hint=(1, None))
+    layout.bind(minimum_height=layout.setter("height"))
+    rv.add_widget(layout)
+    rv.viewclass = "PickRow"
+    rv.data = data
+    dialog = MDDialog(title=title, type="custom", content_cls=rv, md_bg_color=DIALOG_BG,
                       buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
+
+    def closed(*_):
+        global _pick_open
+        _pick_open = None
+
+    dialog.bind(on_dismiss=closed)
+    _pick_open = dialog
     dialog.open()
     return dialog
 
@@ -362,13 +388,13 @@ class SamplingTab(MDBoxLayout):
             obs, photos, v = r["observation"], r["photos"], r["variety"]
             code = obs["bbch_code"] if obs else None
             n = len(photos)
-            complete += code is not None and n == 2
+            complete += code is not None and n >= 1   # basta una foto (canopia o detalle)
             bg, fg = bbch_tag_colors(code)
             row = cache[v["id"]]
             row.title = v["name"]
             row.subtitle = (obs["bbch_label"] or ph.bbch_label(code, names)) if code is not None \
                 else ("Foto sin estado asignado" if n else "Pendiente de registro")
-            row.photos, row.photo_tag = n, f"FOTOS {n}/2"
+            row.photos, row.photo_tag = n, ("SIN FOTOS" if not n else f"{n} FOTO" + ("S" if n > 1 else ""))
             row.code_tag = f"BBCH {code:02d}" if code is not None else "BBCH —"
             row.code_bg, row.code_fg, row.done = bg, fg, code is not None
             thumb = photos.get("detail") or photos.get("canopy")
@@ -380,6 +406,29 @@ class SamplingTab(MDBoxLayout):
         total = max(1, len(rows))
         self.ids.progress.value = complete / total
         self.ids.progress_text.text = f"{complete}/{len(rows)} completas"
+        # Semana no muestreada: casilla marcada, aviso y lista atenuada.
+        skipped = bool(week.get("skipped"))
+        self._loading_skip = True
+        self.ids.skip_box.active = skipped
+        self._loading_skip = False
+        if skipped:
+            self.ids.week_kicker.text += " · NO MUESTREADA"
+            self.ids.progress_text.text = "omitida"
+        box.opacity = .45 if skipped else 1
+
+    def set_skipped(self, active: bool):
+        """Marca/desmarca la semana como «no muestreada»: se excluye de los informes de
+        período, por variedad y matriz (los datos, si los hubiera, no se borran)."""
+        if getattr(self, "_loading_skip", False):
+            return
+        a = app()
+        if bool(a.week.get("skipped")) == bool(active):
+            return
+        a.db.set_week_skipped(a.week["id"], active)
+        a.week = a.db.get_week(a.week["id"])
+        a.toast(f"Semana {a.week['week_number']} marcada como no muestreada: no aparecerá en los informes"
+                if active else f"Semana {a.week['week_number']} vuelve a incluirse en los informes")
+        self.refresh()
 
     def shift_week(self, delta: int):
         a = app()
@@ -1297,7 +1346,8 @@ class PreviewTab(MDScreen):
         ids.grid.rows = sm["grid"]["rows"]
         lack = []
         if sm["missing_photos"]:
-            lack.append(f"{sm['missing_photos']} foto" + ("s" if sm["missing_photos"] != 1 else ""))
+            n = sm["missing_photos"]   # registros sin ninguna foto
+            lack.append(f"{n} registro" + ("s" if n != 1 else "") + " sin fotos")
         if sm["missing_bbch"]:
             lack.append(f"{sm['missing_bbch']} estado" + ("s" if sm["missing_bbch"] != 1 else ""))
         ids.lack_text.text = ("Faltan " + " y ".join(lack)) if lack else "Completo"

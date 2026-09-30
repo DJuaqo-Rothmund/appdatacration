@@ -150,12 +150,31 @@ class FenoRubusApp(MDApp):
         request_runtime_permissions()
         self.reminders.apply()
         Clock.schedule_interval(lambda *_: self._check_reminder(), 60)
-        # Precarga la pantalla más usada cuando la app ya está visible y en reposo.
-        Clock.schedule_once(lambda *_: self.observation, 2.5)
+        # Precarga, de a una y en reposo, las pantallas que más cuesta crear en teléfonos
+        # básicos (p. ej. Samsung A06): así se abren al instante al tocarlas.
+        self._prewarm = [lambda: self.observation,
+                         lambda: self.settings,
+                         lambda: self.settings.ids.varieties.refresh()]
+        Clock.schedule_once(self._prewarm_next, 2.5)
         # Sube lo que haya quedado en cola (sin red la última vez).
         # y respalda la base en Drive una vez al día (las fotos ya se suben solas).
         if self.db.get_setting("drive_enabled", False):
             Clock.schedule_once(lambda *_: self.workers.submit(self._drive_daily), 6)
+
+    def _prewarm_next(self, *_):
+        """Crea la siguiente pantalla pendiente solo si el usuario está en reposo en el
+        inicio; si está usando la app, lo reintenta más tarde para no trabarla."""
+        if not self._prewarm:
+            return
+        if self.sm.current != "home" or self.sm.transition.is_active:
+            Clock.schedule_once(self._prewarm_next, 3)
+            return
+        step = self._prewarm.pop(0)
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 (la precarga nunca debe cerrar la app)
+            print("prewarm:", exc)
+        Clock.schedule_once(self._prewarm_next, 2)
 
     def on_resume(self):
         self.week = self.db.current_week() if self.week is None else self.week

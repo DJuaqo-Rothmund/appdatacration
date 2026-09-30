@@ -174,7 +174,12 @@ def test_preview_mode_and_summary(db, tmp_path):
     db.set_photo(obs["id"], "detail", synthetic_photo(65, "detail", str(tmp_path / "d.jpg"), 1))
     sm = report_summary(db, "weekly", season, week_id=w["id"])
     assert sm["cells"] == 10 and sm["photos"] == 1 and sm["complete"] == 0
-    assert any("Código 11 · S1: falta foto canopia, estado BBCH" == m for m in sm["missing"])
+    # Fotos opcionales: con una sola (detalle) solo falta el estado; sin fotos, «fotos».
+    assert any("Código 11 · S1: falta estado BBCH" == m for m in sm["missing"])
+    assert any(m.endswith(": falta fotos, estado BBCH") for m in sm["missing"])
+    assert sm["photos_expected"] == 10 and sm["missing_photos"] == 9
+    db.update_observation(obs["id"], bbch_code=65, bbch_label="BBCH 65")
+    assert report_summary(db, "weekly", season, week_id=w["id"])["complete"] == 1
     rep = ReportGenerator(db, str(tmp_path / "reports"))
     res = rep.weekly(w["id"], "preview")
     html = open(res.path, encoding="utf-8").read()
@@ -654,3 +659,44 @@ def test_gps_keeps_best_reading_and_stops_at_10m():
     req3 = geo.LocationRequest(lambda *a: None, lambda m: got2.append(("error", m)))
     req3.finish()
     assert got2[-1][0] == "error"
+
+
+def test_skipped_week_excluded_from_reports(db, tmp_path):
+    from reporter import report_summary
+    season = 2026
+    db.ensure_weeks(season, 3)
+    ws = db.list_weeks(season)
+    v = db.list_varieties()[0]
+    for w in ws:
+        obs = db.get_or_create_observation(v["id"], w["id"])
+        db.update_observation(obs["id"], bbch_code=10 + w["week_number"], bbch_label="x")
+    db.set_week_skipped(ws[1]["id"], True)
+    assert [w["week_number"] for w in db.list_weeks(season, include_skipped=False)] == [1, 3]
+    assert len(db.list_weeks(season)) == 3                         # no se borra nada
+    assert [r["week_number"] for r in db.variety_timeline(v["id"], season)] == [1, 3]
+    assert report_summary(db, "period", season, week_from=1, week_to=3)["weeks"] == 2
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    html = open(rep.period(season, 1, 3).path, encoding="utf-8").read()
+    import re
+    heads = re.findall(r'<th class="w"[^>]*>(S\d+)</th>', html)   # columnas de la tabla
+    assert heads == ["S1", "S3"]
+    db.set_week_skipped(ws[1]["id"], False)
+    assert len(db.list_weeks(season, include_skipped=False)) == 3
+
+
+def test_each_phone_keeps_its_own_configuration(tmp_path):
+    """Teléfono B: se borran las 10 variedades de fábrica y se crean otras. Al reabrir la
+    app (reinicio o actualización con migraciones) NO vuelven las de fábrica."""
+    path = str(tmp_path / "telefono_b.sqlite3")
+    d = Database(path)
+    for v in d.list_varieties(include_archived=True):
+        d.delete_variety(v["id"], purge=True)
+    d.add_variety("Heritage", code="HER", sector=3, irrigation=1)
+    d.add_variety("Tulameen", code="TUL")
+    d.set_setting("reminder", {"weekday": 2})
+    d.close()
+    d = Database(path)                       # «actualización»: init_schema + seed_defaults
+    assert [v["name"] for v in d.list_varieties()] == ["Heritage", "Tulameen"]
+    assert d.get_variety(d.list_varieties()[0]["id"])["sector"] == 3
+    assert d.get_setting("reminder") == {"weekday": 2}
+    d.close()

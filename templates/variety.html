@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import geo_line, bbch_chip, photo, ai_line, compare_chart %}
+{% from "_macros.html" import geo_line, bbch_chip, photo, photo_pair, ai_line, compare_chart %}
 {% block meta %}{% if variety.code %}<span>Código: {{ variety.code }}</span>{% endif %}<span>{{ timeline|length }} semanas registradas</span>{% endblock %}
 {% block content %}
 <h2>Parámetros biométricos y productivos</h2>
@@ -39,10 +39,7 @@
     <div class="when">Semana {{ t.week_number }} · {{ t.week_label }}</div>
     <div class="card tl-body">
       <div style="display:flex; flex-direction:column; gap:8px; min-width:0;">
-        <div class="photos">
-          {{ photo(t.img.canopy, "Canopia") }}
-          {{ photo(t.img.detail, "Detalle") }}
-        </div>
+        {{ photo_pair(t.img) }}
         {% if t.extras %}<div class="extras">{% for src in t.extras %}<img src="{{ src }}" alt="Foto adicional" loading="lazy">{% endfor %}</div>{% endif %}
       </div>
       <div style="display:flex; flex-direction:column; gap:8px;">
