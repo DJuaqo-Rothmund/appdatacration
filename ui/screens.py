@@ -415,6 +415,9 @@ class SamplingTab(MDBoxLayout):
             self.ids.week_kicker.text += " · NO MUESTREADA"
             self.ids.progress_text.text = "omitida"
         box.opacity = .45 if skipped else 1
+        n_meas = sum(1 for m in a.db.list_measures(week["id"]) if m["n"])
+        self.ids.measures_btn.text = ("Mediciones de la semana" if not n_meas
+                                      else f"Mediciones de la semana · {n_meas} con datos")
 
     def set_skipped(self, active: bool):
         """Marca/desmarca la semana como «no muestreada»: se excluye de los informes de
@@ -429,6 +432,9 @@ class SamplingTab(MDBoxLayout):
         a.toast(f"{ph.week_title(a.week)} marcada como no muestreada: no aparecerá en los informes"
                 if active else f"{ph.week_title(a.week)} vuelve a incluirse en los informes")
         self.refresh()
+
+    def open_measures(self):
+        open_measures_menu()
 
     def shift_week(self, delta: int):
         a = app()
@@ -712,7 +718,6 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
                 self.ids[k].text = m[k]
         self.ids.historical_note.text = m.get("historical_note") or ""
         self.load_custom()
-        self.load_attachments()
 
     def update_photo_hint(self):
         if "photo_hint" not in self.ids:
@@ -793,89 +798,6 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
         app().db.delete_custom_field(field_id)
         self.load_custom()
 
-    # ------------------------------------------------------ fotos adjuntas
-    def load_attachments(self):
-        a = app()
-        box = self.ids.attachments
-        fast_clear(box)
-        items = a.db.list_attachments(self.variety_id, a.season)
-        for f in items:
-            row = AttachmentRow(caption=f["caption"] or "", item=f, screen=self,
-                                date=ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10])))
-            row.ids.thumb_box.add_widget(thumb_widget(f["path"], 160))
-            box.add_widget(row)
-        if not items:
-            box.add_widget(MDLabel(text="Sin fotos adjuntas.", font_style="Caption",
-                                   adaptive_height=True, theme_text_color="Custom",
-                                   text_color=c(theme.MUTED)))
-
-    def attach(self, source: str):
-        """Tomar una foto o elegir una o varias de la galería y adjuntarlas a la ficha."""
-        a = app()
-        variety_id, season = self.variety_id, a.season
-        v = a.db.get_variety(variety_id)
-        base = ph.photo_basename(v, _dt.date.today().isoformat(), "attachment")
-
-        def done(result, origin):
-            paths = [p for p in (result if isinstance(result, list) else [result]) if p]
-            if not paths:
-                if origin == "error":
-                    a.toast("No se pudo obtener la foto.")
-                return
-            a.toast("Guardando foto…" if len(paths) == 1 else f"Guardando {len(paths)} fotos…")
-
-            def work():
-                ids, error = [], None
-                try:
-                    dest_dir = data_subdir("photos", f"T{season}", "adjuntos")
-                    for tmp in paths:
-                        path = store_photo(tmp, dest_dir, base, exact=True)
-                        ids.append(a.db.add_attachment(variety_id, season, path,
-                                                       source="camera" if origin == "camera" else "gallery"))
-                        a.thumb(path, 160)
-                        a.backup_attachment(path, season)
-                except Exception as exc:  # noqa: BLE001
-                    error = exc
-                Clock.schedule_once(lambda *_: stored(ids, error))
-
-            def stored(ids, error):
-                if self.variety_id != variety_id:
-                    return
-                self.load_attachments()
-                if error:
-                    a.toast(f"No se pudo guardar la foto: {error}")
-                elif len(ids) == 1:
-                    self.caption_dialog(a.db.query_one(
-                        "SELECT * FROM variety_attachments WHERE id=?", (ids[0],)))
-
-            a.workers.submit(work)
-
-        if source == "camera":
-            a.media.take_photo(done, base, exact=True)
-        else:
-            a.media.pick_images(done)
-
-    def caption_dialog(self, item: dict | None):
-        if not item:
-            return
-        a = app()
-        form = CaptionForm()
-        form.ids.caption.text = item["caption"] or ""
-
-        def ok(f):
-            a.db.set_attachment_caption(item["id"], f.ids.caption.text)
-            self.load_attachments()
-
-        form_dialog("Descripción de la foto", form, ok)
-
-    def delete_attachment(self, item: dict):
-        def go():
-            app().db.delete_attachment(item["id"])
-            self.load_attachments()
-
-        confirm("Quitar foto adjunta", "La foto deja de aparecer en la ficha de la variedad "
-                "(el archivo se conserva en el teléfono).", [("Quitar", go)])
-
     def report(self):
         self.save()
         a = app()
@@ -946,6 +868,7 @@ class ObservationScreen(MDScreen):
         self.ids.week_caption.text = f"{ph.week_title(self.week)} · {self.week['label']}"
         self._refresh_slot("canopy")
         self._refresh_slot("detail")
+        self.load_attachments()
         self.ids.bbch.text = self.obs["bbch_label"] or (
             ph.bbch_label(self.obs["bbch_code"], a.db.bbch_names())
             if self.obs["bbch_code"] is not None else "")
@@ -1103,6 +1026,89 @@ class ObservationScreen(MDScreen):
 
     def _set_bbch(self, code: int):
         self.ids.bbch.text = ph.bbch_label(code, app().db.bbch_names())
+
+    # ------------------------------------------------------ fotos adjuntas
+    def load_attachments(self):
+        a = app()
+        box = self.ids.attachments
+        fast_clear(box)
+        items = a.db.list_attachments(self.variety["id"], week_id=self.week["id"])
+        for f in items:
+            row = AttachmentRow(caption=f["caption"] or "", item=f, screen=self,
+                                date=ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10])))
+            row.ids.thumb_box.add_widget(thumb_widget(f["path"], 160))
+            box.add_widget(row)
+        if not items:
+            box.add_widget(MDLabel(text="Sin fotos adjuntas.", font_style="Caption",
+                                   adaptive_height=True, theme_text_color="Custom",
+                                   text_color=c(theme.MUTED)))
+
+    def attach(self, source: str):
+        """Fotos adjuntas a ESTE registro semanal (tomar o elegir de la galería) con descripción."""
+        a = app()
+        variety, week = self.variety, self.week
+        base = ph.photo_basename(variety, week["start_date"], "attachment")
+
+        def done(result, origin):
+            paths = [p for p in (result if isinstance(result, list) else [result]) if p]
+            if not paths:
+                if origin == "error":
+                    a.toast("No se pudo obtener la foto.")
+                return
+            a.toast("Guardando foto…" if len(paths) == 1 else f"Guardando {len(paths)} fotos…")
+
+            def work():
+                ids, error = [], None
+                try:
+                    dest_dir = data_subdir("photos", f"T{week['season']}", f"S{week['week_number']:02d}")
+                    for tmp in paths:
+                        path = store_photo(tmp, dest_dir, base, exact=True)
+                        ids.append(a.db.add_attachment(
+                            variety["id"], week["season"], path, week_id=week["id"],
+                            source="camera" if origin == "camera" else "gallery"))
+                        a.thumb(path, 160)
+                        a.backup_extra(path, week["start_date"], "Adjuntas")
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                Clock.schedule_once(lambda *_: stored(ids, error))
+
+            def stored(ids, error):
+                if self.week["id"] != week["id"] or self.variety["id"] != variety["id"]:
+                    return
+                self.load_attachments()
+                if error:
+                    a.toast(f"No se pudo guardar la foto: {error}")
+                elif len(ids) == 1:
+                    self.caption_dialog(a.db.query_one(
+                        "SELECT * FROM variety_attachments WHERE id=?", (ids[0],)))
+
+            a.workers.submit(work)
+
+        if source == "camera":
+            a.media.take_photo(done, base, exact=True)
+        else:
+            a.media.pick_images(done)
+
+    def caption_dialog(self, item: dict | None):
+        if not item:
+            return
+        a = app()
+        form = CaptionForm()
+        form.ids.caption.text = item["caption"] or ""
+
+        def ok(f):
+            a.db.set_attachment_caption(item["id"], f.ids.caption.text)
+            self.load_attachments()
+
+        form_dialog("Descripción de la foto", form, ok)
+
+    def delete_attachment(self, item: dict):
+        def go():
+            app().db.delete_attachment(item["id"])
+            self.load_attachments()
+
+        confirm("Quitar foto adjunta", "La foto deja de aparecer en el registro y en los informes "
+                "(el archivo se conserva en el teléfono).", [("Quitar", go)])
 
     # -------------------------------------------------------------- fotos
     def _refresh_slot(self, kind: str):
@@ -2515,3 +2521,334 @@ class AILabScreen(MDScreen):
         errs = (f"\n{len(res.errors)} advertencia(s): " + "; ".join(res.errors[:3])) if res.errors else ""
         self.ids.import_text.text = f"Importado: {summary}{errs}"
         app().toast("Importación terminada")
+
+
+# ===========================================================================
+# Mediciones personalizadas (registro de imágenes o planilla de datos)
+# ===========================================================================
+class EntryRow(MDBoxLayout):
+    title = StringProperty()
+    subtitle = StringProperty()
+    has_thumb = BooleanProperty(False)
+    item = ObjectProperty(None, allownone=True)
+    screen = ObjectProperty()
+
+
+def _variety_label(variety_id, varieties) -> str:
+    v = next((v for v in varieties if v["id"] == variety_id), None)
+    return v["name"] if v else "General"
+
+
+def _entry_summary(measure: dict, data: dict) -> str:
+    parts = [f"{col}: {data[col]}" for col in measure["columns"] if str(data.get(col, "")).strip()]
+    parts += [f"{k}: {v}" for k, v in data.items() if k not in measure["columns"] and str(v).strip()]
+    return " · ".join(parts) or "Fila vacía"
+
+
+def open_measures_menu():
+    """Lista de mediciones de la semana actual + crear nueva + exportar todas a Excel."""
+    a = app()
+    week = a.week
+    items = [("+ Nueva medición", "Registro de imágenes o planilla de datos", new_measure_dialog)]
+    measures = a.db.list_measures(week["id"])
+    for m in measures:
+        unit = ("foto(s)" if m["kind"] == "images" else "fila(s)")
+        kind = "Imágenes" if m["kind"] == "images" else "Planilla"
+        items.append((m["name"], f"{kind} · {m['n']} {unit} esta semana",
+                      lambda m=m: a.open_measure(m["id"], week["id"])))
+    if measures:
+        items.append(("Exportar todas a Excel", "Una hoja por medición · toda la temporada",
+                      lambda: export_measures_xlsx([m["id"] for m in measures])))
+    pick_dialog(f"Mediciones · {ph.week_title(week)}", items)
+
+
+def export_measures_xlsx(measure_ids: list[int]):
+    a = app()
+    a.toast("Generando planilla Excel…")
+
+    def work():
+        try:
+            from measures_export import export_measures
+            path = export_measures(a.db, measure_ids, a.season)
+            Clock.schedule_once(lambda *_: a.report_actions(
+                path, "Planilla Excel (.xlsx)", "Mediciones de toda la temporada", viewable=False))
+        except Exception as exc:  # noqa: BLE001
+            error = exc
+            Clock.schedule_once(lambda *_: a.toast(f"No se pudo exportar: {error}"))
+
+    a.workers.submit(work)
+
+
+def _measure_form(measure: dict | None = None):
+    """Formulario: nombre, tipo (imágenes / planilla) y columnas."""
+    from kivy.factory import Factory
+    box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                      padding=(0, dp(8), 0, 0))
+    box.name = Factory.Field(hint_text="Nombre de la medición")
+    box.add_widget(box.name)
+    box.kind = measure["kind"] if measure else "table"
+    box.cols = Factory.Field(hint_text="Columnas, separadas por coma")
+    box.cols_hint = MDLabel(text="Ej.: Planta, Largo (cm), N° de frutos", font_style="Caption",
+                            adaptive_height=True, theme_text_color="Custom", text_color=c(theme.MUTED))
+    if measure:
+        box.name.text = measure["name"]
+        box.cols.text = ", ".join(measure["columns"])
+    else:
+        row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+        buttons = {}
+
+        def choose(kind):
+            box.kind = kind
+            for k, b in buttons.items():
+                on = k == kind
+                b.md_bg_color = c(theme.LEAF_DARK) if on else c("#FFFFFF", 0)
+                b.text_color = c("#FFFFFF") if on else c(theme.LEAF_DARK)
+            for w in (box.cols, box.cols_hint):
+                w.opacity, w.disabled = (1, False) if kind == "table" else (0, True)
+
+        for kind, label in (("table", "Planilla de datos"), ("images", "Imágenes")):
+            b = MDRectangleFlatButton(text=label, theme_text_color="Custom", line_color=c(theme.LEAF_DARK),
+                                      on_release=lambda *_, k=kind: choose(k))
+            buttons[kind] = b
+            row.add_widget(b)
+        box.add_widget(row)
+        Clock.schedule_once(lambda *_: choose("table"))
+    if not measure or measure["kind"] == "table":
+        box.add_widget(box.cols)
+        box.add_widget(box.cols_hint)
+    return box
+
+
+def _split_columns(text: str) -> list[str]:
+    sep = ";" if ";" in text else ","
+    return [t.strip() for t in text.split(sep) if t.strip()]
+
+
+def new_measure_dialog():
+    a = app()
+
+    def ok(form):
+        try:
+            mid = a.db.add_measure(form.name.text, form.kind,
+                                   _split_columns(form.cols.text) if form.kind == "table" else [])
+        except ValueError as exc:
+            a.toast(str(exc))
+            return False
+        a.open_measure(mid, a.week["id"])
+
+    form_dialog("Nueva medición", _measure_form(), ok, "CREAR")
+
+
+class MeasureScreen(MDScreen):
+    """Registros de UNA medición en UNA semana: fotos con descripción o filas de planilla."""
+
+    def load(self, measure_id: int, week_id: int):
+        a = app()
+        self.measure = a.db.get_measure(measure_id)
+        self.week = a.db.get_week(week_id)
+        self.ids.bar.title = self.measure["name"]
+        kind = "PLANILLA DE DATOS" if self.measure["kind"] == "table" else "REGISTRO DE IMÁGENES"
+        self.ids.kicker.text = f"{kind} · {ph.week_title(self.week).upper()}"
+        self.ids.columns_text.text = (
+            "Columnas: " + ", ".join(self.measure["columns"]) if self.measure["kind"] == "table"
+            else "Cada foto con su descripción y, si quiere, la variedad.")
+        actions = self.ids.actions
+        fast_clear(actions)
+        from kivy.factory import Factory
+        if self.measure["kind"] == "table":
+            actions.add_widget(Factory.GhostButton(icon="table-row-plus-after", text="Agregar fila",
+                                                   on_release=lambda *_: self.entry_dialog(None)))
+        else:
+            actions.add_widget(Factory.GhostButton(icon="camera-outline", text="Tomar foto",
+                                                   on_release=lambda *_: self.add_images("camera")))
+            actions.add_widget(Factory.GhostButton(icon="image-multiple-outline", text="Desde galería",
+                                                   on_release=lambda *_: self.add_images("gallery")))
+        self.refresh()
+
+    def refresh(self):
+        a = app()
+        box = self.ids.entries
+        fast_clear(box)
+        entries = a.db.list_entries(self.measure["id"], week_id=self.week["id"])
+        varieties = a.db.list_varieties(include_archived=True)
+        for e in entries:
+            vname = _variety_label(e["variety_id"], varieties)
+            if self.measure["kind"] == "table":
+                row = EntryRow(title=_entry_summary(self.measure, e["data"]), subtitle=vname,
+                               item=e, screen=self)
+            else:
+                row = EntryRow(title=e["caption"] or "Sin descripción", subtitle=vname, item=e,
+                               screen=self, has_thumb=True)
+                row.ids.thumb_box.add_widget(thumb_widget(e["path"], 160))
+            box.add_widget(row)
+        unit = "fila(s)" if self.measure["kind"] == "table" else "foto(s)"
+        self.ids.count_text.text = f"{len(entries)} {unit} esta semana"
+        if not entries:
+            box.add_widget(MDLabel(text="Sin registros esta semana.", font_style="Caption",
+                                   adaptive_height=True, theme_text_color="Custom",
+                                   text_color=c(theme.MUTED)))
+
+    # ----------------------------------------------------------- registros
+    def entry_dialog(self, entry: dict | None, variety_id=None):
+        """Fila de planilla (o descripción de una foto) + variedad opcional."""
+        a = app()
+        from kivy.factory import Factory
+        is_table = self.measure["kind"] == "table"
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6),
+                           padding=(0, dp(22), 0, 0))
+        state = {"variety_id": entry["variety_id"] if entry else variety_id}
+        varieties = a.db.list_varieties()
+        vbtn = Factory.GhostButton(icon="fruit-cherries")
+
+        def set_variety(vid):
+            state["variety_id"] = vid
+            vbtn.text = f"Variedad: {_variety_label(vid, varieties)}"
+
+        def pick_variety(*_):
+            pick_dialog("Variedad", [("General", "Sin variedad específica", lambda: set_variety(None))]
+                        + [(v["name"], v["code"] or "", lambda v=v: set_variety(v["id"])) for v in varieties])
+
+        vbtn.bind(on_release=pick_variety)
+        set_variety(state["variety_id"])
+        fields = {}
+        if is_table:
+            data = entry["data"] if entry else {}
+            cols = list(self.measure["columns"]) + [k for k in data if k not in self.measure["columns"]]
+            for col in cols:
+                f = Factory.Field(hint_text=col, text=str(data.get(col, "")))
+                fields[col] = f
+                form.add_widget(f)
+        else:
+            fields["caption"] = Factory.Field(hint_text="Descripción", text=(entry or {}).get("caption") or "")
+            form.add_widget(fields["caption"])
+        form.add_widget(vbtn)
+        scroll = None
+        if len(fields) > 5:   # planillas anchas: el formulario se desplaza
+            from kivymd.uix.scrollview import MDScrollView
+            scroll = MDScrollView(size_hint_y=None, height=dp(380), do_scroll_x=False)
+            scroll.add_widget(form)
+        dialog = None
+
+        def save(again=False):
+            if is_table:
+                values = {col: f.text.strip() for col, f in fields.items()}
+                if not any(values.values()):
+                    a.toast("Complete al menos un dato.")
+                    return
+                if entry:
+                    a.db.update_entry(entry["id"], data=values, variety_id=state["variety_id"])
+                else:
+                    a.db.add_entry(self.measure["id"], self.week["id"], state["variety_id"], data=values)
+            else:
+                a.db.update_entry(entry["id"], caption=fields["caption"].text,
+                                  variety_id=state["variety_id"])
+            dialog.dismiss()
+            self.refresh()
+            if again:   # siguiente fila con la misma variedad
+                Clock.schedule_once(lambda *_: self.entry_dialog(None, state["variety_id"]), .2)
+
+        buttons = [MDFlatButton(text="CANCELAR", on_release=lambda *_: dialog.dismiss())]
+        if is_table and not entry:
+            buttons.append(MDFlatButton(text="GUARDAR Y OTRA", theme_text_color="Custom",
+                                        text_color=c(theme.LEAF_DARK), on_release=lambda *_: save(True)))
+        buttons.append(MDFlatButton(text="GUARDAR", theme_text_color="Custom",
+                                    text_color=c(theme.LEAF_DARK), on_release=lambda *_: save()))
+        title = ("Nueva fila" if not entry else "Editar fila") if is_table else "Foto"
+        dialog = MDDialog(title=title, type="custom", content_cls=scroll or form,
+                          md_bg_color=DIALOG_BG, buttons=buttons)
+        dialog.open()
+
+    def edit_entry(self, entry: dict):
+        self.entry_dialog(entry)
+
+    def delete_entry(self, entry: dict):
+        def go():
+            app().db.delete_entry(entry["id"])
+            self.refresh()
+
+        what = "esta fila" if self.measure["kind"] == "table" else "esta foto (el archivo queda en el teléfono)"
+        confirm("Eliminar registro", f"¿Eliminar {what}?", [("Eliminar", go)])
+
+    def add_images(self, source: str):
+        a = app()
+        measure, week = self.measure, self.week
+        start = _dt.date.fromisoformat(week["start_date"][:10])
+        from platform_utils import slugify
+        base = f"{start:%d%m%Y}-{slugify(measure['name'])[:40] or 'medicion'}"
+
+        def done(result, origin):
+            paths = [p for p in (result if isinstance(result, list) else [result]) if p]
+            if not paths:
+                if origin == "error":
+                    a.toast("No se pudo obtener la foto.")
+                return
+            a.toast("Guardando foto…" if len(paths) == 1 else f"Guardando {len(paths)} fotos…")
+
+            def work():
+                ids, error = [], None
+                try:
+                    dest_dir = data_subdir("photos", f"T{week['season']}", "mediciones")
+                    for tmp in paths:
+                        path = store_photo(tmp, dest_dir, base, exact=True)
+                        ids.append(a.db.add_entry(measure["id"], week["id"], path=path))
+                        a.thumb(path, 160)
+                        a.backup_extra(path, week["start_date"], measure["name"])
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                Clock.schedule_once(lambda *_: stored(ids, error))
+
+            def stored(ids, error):
+                if self.measure["id"] != measure["id"] or self.week["id"] != week["id"]:
+                    return
+                self.refresh()
+                if error:
+                    a.toast(f"No se pudo guardar la foto: {error}")
+                elif len(ids) == 1:
+                    e = next((x for x in a.db.list_entries(measure["id"], week_id=week["id"])
+                              if x["id"] == ids[0]), None)
+                    if e:
+                        self.entry_dialog(e)
+
+            a.workers.submit(work)
+
+        if source == "camera":
+            a.media.take_photo(done, base, exact=True)
+        else:
+            a.media.pick_images(done)
+
+    # --------------------------------------------------------- definición
+    def edit(self):
+        a = app()
+        m = self.measure
+        form = _measure_form(m)
+        from kivy.factory import Factory
+        form.add_widget(Factory.GhostButton(
+            icon="delete-outline", text="Eliminar medición",
+            on_release=lambda *_: (dialog.dismiss(), self.delete_measure())))
+
+        def ok(f):
+            try:
+                a.db.update_measure(m["id"], name=f.name.text,
+                                    columns=_split_columns(f.cols.text) if m["kind"] == "table" else None)
+            except ValueError as exc:
+                a.toast(str(exc))
+                return False
+            self.load(m["id"], self.week["id"])
+
+        dialog = form_dialog("Editar medición", form, ok)
+
+    def delete_measure(self):
+        a = app()
+        n = len(a.db.list_entries(self.measure["id"]))
+
+        def go():
+            a.db.delete_measure(self.measure["id"])
+            a.toast("Medición eliminada")
+            a.back()
+
+        confirm("Eliminar medición",
+                f"Se eliminará «{self.measure['name']}» y sus {n} registro(s) de todas las semanas. "
+                "Las fotos quedan en el teléfono.", [("Eliminar", go)])
+
+    def export(self):
+        export_measures_xlsx([self.measure["id"]])

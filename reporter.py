@@ -330,6 +330,39 @@ class ReportGenerator:
         return [src for p in self.db.list_photos(obs["id"]) if not p["is_primary"]
                 for src in [images.src(p["path"], 360)] if src]
 
+    def _attachments(self, variety_id: int, week_id: int, images: ImageStore) -> list[dict]:
+        """Fotos adjuntas al registro semanal de la variedad (con su descripción)."""
+        return [{"src": src, "caption": f["caption"] or ""}
+                for f in self.db.list_attachments(variety_id, week_id=week_id)
+                for src in [images.src(f["path"], 480)] if src]
+
+    def _measures(self, images: ImageStore, week_id: int | None = None, season: int | None = None,
+                  variety_id: int | None = None) -> list[dict]:
+        """Mediciones personalizadas con registros (de la semana o, por variedad, de la temporada)."""
+        out = []
+        for m in self.db.list_measures():
+            entries = self.db.list_entries(m["id"], week_id=week_id, season=season)
+            if variety_id is not None:
+                entries = [e for e in entries if e["variety_id"] == variety_id]
+            if not entries:
+                continue
+            if m["kind"] == "table":
+                cols = list(m["columns"])
+                for e in entries:
+                    cols += [k for k in e["data"] if k not in cols]
+                rows = [{"week": ph.week_short(e), "variety": e["variety_name"] or "General",
+                         "values": [e["data"].get(col, "") for col in cols]} for e in entries]
+                out.append({"name": m["name"], "kind": "table", "columns": cols, "rows": rows})
+            else:
+                items = [{"src": src, "caption": e["caption"] or "",
+                          "when": " · ".join(x for x in (
+                              ph.week_short(e) if week_id is None else "",
+                              (e["variety_name"] or "General") if variety_id is None else "") if x)}
+                         for e in entries for src in [images.src(e["path"], 480)] if src]
+                if items:
+                    out.append({"name": m["name"], "kind": "images", "pics": items})
+        return out
+
     def _photo_ctx(self, photos: dict, images: ImageStore, max_side: int | None = None) -> dict:
         return {kind: images.src(photos[kind]["path"], max_side) if kind in photos else None
                 for kind, _ in PHOTO_KINDS}
@@ -382,12 +415,14 @@ class ReportGenerator:
         for row in self.db.week_overview(week_id):
             cards.append({"variety": row["variety"], **self._obs_ctx(row["observation"]),
                           "img": self._photo_ctx(row["photos"], images),
-                          "extras": self._extras(row["observation"], images)})
+                          "extras": self._extras(row["observation"], images),
+                          "attachments": self._attachments(row["variety"]["id"], week_id, images)})
         done = sum(1 for c in cards if c["code"] is not None)
         title = f"Reporte semanal · {ph.week_title(week)}"
         return self._render(
             "weekly.html", "semanal_{1}_S{0:02d}".format(*ph.iso_week(week["start_date"])),
             "semanal", title, images, package, week=week, cards=cards,
+            measures=self._measures(images, week_id=week_id),
             subtitle=f"{week['label']} · {ph.week_title(week)}",
             stats={"varieties": len(cards), "done": done,
                    "photos": sum(bool(c["img"]["canopy"]) + bool(c["img"]["detail"]) for c in cards)})
@@ -441,6 +476,7 @@ class ReportGenerator:
             timeline.append({"week_number": o["week_number"], "week_label": o["week_label"],
                              "start_date": o["start_date"], **self._obs_ctx(o),
                              "img": self._photo_ctx(o["photos"], images),
+                             "attachments": self._attachments(variety_id, o["week_id"], images),
                              "extras": self._extras(o, images)})
         pts = [(t["week_number"], t["code"]) for t in timeline if t["code"] is not None]
         chart = svg_progress(pts, min(p[0] for p in pts), max(max(p[0] for p in pts),
@@ -452,10 +488,10 @@ class ReportGenerator:
                                "week": self._wlabel(season)(hit[0]) if hit else None})
         metrics = self.db.get_metrics(variety_id, season)
         custom = self.db.list_custom_fields(variety_id, season)
-        attachments = [{"src": src, "caption": f["caption"] or "",
-                        "date": ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10]))}
-                       for f in self.db.list_attachments(variety_id, season)
-                       for src in [images.src(f["path"], 720)] if src]
+        attachments = [{"src": src, "caption": f["caption"] or "",   # generales (sin semana)
+                        "when": ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10]))}
+                       for f in self.db.list_attachments(variety_id, season, general=True)
+                       for src in [images.src(f["path"], 480)] if src]
         all_weeks = self.db.list_weeks(season, include_skipped=False)
         compare = self._compare(self._heatmap(season, all_weeks, self.db.list_varieties()),
                                 all_weeks, [variety_id])
@@ -464,6 +500,7 @@ class ReportGenerator:
             "variety.html", f"variedad_{slugify(v['name'])}_{season}", "variedad", title,
             images, package, variety=v, timeline=timeline, chart=chart, metrics=metrics,
             compare=compare, attachments=attachments,
+            measures=self._measures(images, season=season, variety_id=variety_id),
             custom=custom, milestones=milestones,
             subtitle=f"Timeline longitudinal · {ph.season_title(season)}")
 

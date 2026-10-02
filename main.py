@@ -46,10 +46,11 @@ from android_bridge import create_media, make_thumbnail, request_runtime_permiss
 from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, resource_path  # noqa: E402
-from ui.screens import (AILabScreen, HomeScreen, ObservationScreen, PinForm,  # noqa: E402
-                        SettingsScreen, SplashScreen, VarietyScreen, form_dialog)
+from ui.screens import (AILabScreen, HomeScreen, MeasureScreen, ObservationScreen,  # noqa: E402
+                        PinForm, SettingsScreen, SplashScreen, VarietyScreen, form_dialog)
 
-MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3"}
+MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
 
 class FenoRubusApp(MDApp):
@@ -120,6 +121,14 @@ class FenoRubusApp(MDApp):
     @property
     def variety(self):
         return self._screen(VarietyScreen, "variety")
+
+    @property
+    def measure(self):
+        return self._screen(MeasureScreen, "measure")
+
+    def open_measure(self, measure_id: int, week_id: int):
+        self.measure.load(measure_id, week_id)
+        self.go("measure")
 
     @property
     def ailab(self):
@@ -400,11 +409,14 @@ class FenoRubusApp(MDApp):
             return
         self.drive.enqueue(photo_id, path)
 
-    def backup_attachment(self, path: str, season: int) -> None:
-        """Foto adjunta a la ficha de una variedad → «Año …/Fotos de variedades» en Drive."""
+    def backup_extra(self, path: str, start_date: str, folder: str) -> None:
+        """Fotos adjuntas o de mediciones → carpeta de la semana en Drive («…/Adjuntas», «…/<medición>»)."""
         if not self.db.get_setting("drive_enabled", False):
             return
-        self.drive.enqueue(None, path, remote=f"Año {season}/Fotos de variedades/{os.path.basename(path)}")
+        from drive_backup import DriveBackup
+        safe = folder.replace("/", "-").strip() or "Otras"
+        self.drive.enqueue(None, path, remote=f"{DriveBackup.week_folder(start_date)}/{safe}/"
+                                              f"{os.path.basename(path)}")
 
     def _check_reminder(self):
         if self.reminders.check_due():

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import geo_line, bbch_chip, photo, photo_pair, ai_line, compare_chart %}
+{% from "_macros.html" import geo_line, bbch_chip, photo, photo_pair, ai_line, compare_chart, attach_gallery, measures_block %}
 {% block meta %}{% if variety.code %}<span>Código: {{ variety.code }}</span>{% endif %}<span>{{ timeline|length }} semanas registradas</span>{% endblock %}
 {% block content %}
 <h2>Parámetros biométricos y productivos</h2>
@@ -20,15 +20,8 @@
 {% endif %}
 
 {% if attachments %}
-<h2>Fotos adjuntas</h2>
-<div class="attach">
-{% for f in attachments %}
-  <figure class="card" style="padding: 8px;">
-    <img src="{{ f.src }}" alt="{{ f.caption or 'Foto adjunta' }}" loading="lazy">
-    <figcaption>{{ f.caption or 'Sin descripción' }}<span class="muted">{{ f.date }}</span></figcaption>
-  </figure>
-{% endfor %}
-</div>
+<h2>Fotos adjuntas generales</h2>
+{{ attach_gallery(attachments) }}
 {% endif %}
 
 <h2>Progresión fenológica</h2>
@@ -60,6 +53,7 @@
         {{ ai_line(t) }}
         {{ geo_line(t) }}
         {% if t.notes %}<div class="notes">{{ t.notes }}</div>{% endif %}
+        {{ attach_gallery(t.attachments) }}
       </div>
     </div>
   </div>
@@ -67,4 +61,8 @@
   <p class="muted">Sin registros.</p>
 {% endfor %}
 </div>
+{% if measures %}
+<h2>Mediciones</h2>
+{{ measures_block(measures, show_week=True, show_variety=False) }}
+{% endif %}
 {% endblock %}

@@ -8,7 +8,9 @@ Entidades
 varieties        Catálogo dinámico de variedades (CRUD, archivado suave).
 variety_metrics  Parámetros biométricos por variedad y temporada.
 custom_fields    Campos personalizados llave-valor por variedad y temporada.
-variety_attachments  Fotos adjuntas a la ficha de la variedad (con descripción).
+variety_attachments  Fotos adjuntas a un registro semanal de la variedad (con descripción).
+measures         Mediciones definidas por el usuario: registro de imágenes o planilla.
+measure_entries  Imágenes o filas de planilla de cada medición, por semana.
 sampling_weeks   Semanas de muestreo (Semana 1 = semana del 7 de septiembre).
 observations     Registro fenológico variedad × semana (BBCH, IA, notas).
 photos           Fotos asociadas a una observación (canopy / detail).
@@ -101,6 +103,26 @@ CREATE TABLE IF NOT EXISTS variety_attachments (
     caption      TEXT DEFAULT '',
     source       TEXT DEFAULT 'camera',
     captured_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS measures (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('images', 'table')),
+    columns     TEXT NOT NULL DEFAULT '[]',     -- planilla: nombres de columnas (JSON)
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS measure_entries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    measure_id  INTEGER NOT NULL REFERENCES measures(id) ON DELETE CASCADE,
+    week_id     INTEGER NOT NULL REFERENCES sampling_weeks(id) ON DELETE CASCADE,
+    variety_id  INTEGER REFERENCES varieties(id) ON DELETE SET NULL,
+    path        TEXT,                           -- imagen
+    caption     TEXT DEFAULT '',
+    data        TEXT NOT NULL DEFAULT '{}',     -- fila de planilla {columna: valor}
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sampling_weeks (
@@ -276,6 +298,7 @@ class Database:
         "observations": [("latitude", "REAL"), ("longitude", "REAL"),
                          ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
         "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
+        "variety_attachments": [("week_id", "INTEGER")],                # foto adjunta semanal
     }
 
     def _add_missing_columns(self) -> None:
@@ -470,16 +493,28 @@ class Database:
 
     # ------------------------------------------------- fotos adjuntas (ficha)
     def add_attachment(self, variety_id: int, season: int, path: str, caption: str = "",
-                       source: str = "camera") -> int:
+                       source: str = "camera", week_id: int | None = None) -> int:
         cur = self.execute(
-            "INSERT INTO variety_attachments(variety_id, season, path, caption, source, captured_at) "
-            "VALUES (?,?,?,?,?,?)", (variety_id, season, path, caption.strip(), source, _now()))
+            "INSERT INTO variety_attachments(variety_id, season, path, caption, source, captured_at, "
+            "week_id) VALUES (?,?,?,?,?,?,?)",
+            (variety_id, season, path, caption.strip(), source, _now(), week_id))
         self.log("create", "attachment", cur.lastrowid, os.path.basename(path))
         return cur.lastrowid
 
-    def list_attachments(self, variety_id: int, season: int) -> list[dict]:
-        return self.query("SELECT * FROM variety_attachments WHERE variety_id=? AND season=? "
-                          "ORDER BY captured_at, id", (variety_id, season))
+    def list_attachments(self, variety_id: int, season: int | None = None,
+                         week_id: int | None = None, general: bool = False) -> list[dict]:
+        """Fotos adjuntas de la variedad: de una semana (week_id), de la temporada o solo
+        las generales (sin semana, versiones anteriores)."""
+        sql, params = "SELECT * FROM variety_attachments WHERE variety_id=?", [variety_id]
+        if season is not None:
+            sql += " AND season=?"
+            params.append(season)
+        if week_id is not None:
+            sql += " AND week_id=?"
+            params.append(week_id)
+        elif general:
+            sql += " AND week_id IS NULL"
+        return self.query(sql + " ORDER BY captured_at, id", tuple(params))
 
     def set_attachment_caption(self, attachment_id: int, caption: str) -> None:
         self.execute("UPDATE variety_attachments SET caption=? WHERE id=?",
@@ -488,6 +523,105 @@ class Database:
     def delete_attachment(self, attachment_id: int) -> None:
         self.execute("DELETE FROM variety_attachments WHERE id=?", (attachment_id,))
         self.log("delete", "attachment", attachment_id)
+
+    # ------------------------------------------- mediciones personalizadas
+    MEASURE_KINDS = {"images": "Registro de imágenes", "table": "Planilla de datos"}
+
+    @staticmethod
+    def _measure(row: dict | None) -> dict | None:
+        if row is not None:
+            row["columns"] = json.loads(row.get("columns") or "[]")
+        return row
+
+    def add_measure(self, name: str, kind: str, columns: list[str] | None = None) -> int:
+        name = name.strip()
+        if not name:
+            raise ValueError("Póngale un nombre a la medición.")
+        if kind not in self.MEASURE_KINDS:
+            raise ValueError("Tipo de medición desconocido.")
+        cols = [c.strip() for c in (columns or []) if c and c.strip()]
+        if kind == "table" and not cols:
+            raise ValueError("La planilla necesita al menos una columna.")
+        order = (self.query_one("SELECT MAX(sort_order) AS m FROM measures") or {}).get("m") or 0
+        cur = self.execute(
+            "INSERT INTO measures(name, kind, columns, sort_order, created_at) VALUES (?,?,?,?,?)",
+            (name, kind, json.dumps(list(dict.fromkeys(cols)), ensure_ascii=False), order + 1, _now()))
+        self.log("create", "measure", cur.lastrowid, f"{name} ({kind})")
+        return cur.lastrowid
+
+    def update_measure(self, measure_id: int, name: str | None = None,
+                       columns: list[str] | None = None) -> None:
+        if name is not None:
+            if not name.strip():
+                raise ValueError("Póngale un nombre a la medición.")
+            self.execute("UPDATE measures SET name=? WHERE id=?", (name.strip(), measure_id))
+        if columns is not None:
+            cols = list(dict.fromkeys(c.strip() for c in columns if c and c.strip()))
+            if not cols:
+                raise ValueError("La planilla necesita al menos una columna.")
+            self.execute("UPDATE measures SET columns=? WHERE id=?",
+                         (json.dumps(cols, ensure_ascii=False), measure_id))
+
+    def delete_measure(self, measure_id: int) -> None:
+        self.execute("DELETE FROM measures WHERE id=?", (measure_id,))
+        self.log("delete", "measure", measure_id)
+
+    def get_measure(self, measure_id: int) -> dict | None:
+        return self._measure(self.query_one("SELECT * FROM measures WHERE id=?", (measure_id,)))
+
+    def list_measures(self, week_id: int | None = None) -> list[dict]:
+        """Mediciones definidas; con week_id agrega «n» = registros de esa semana."""
+        rows = self.query(
+            "SELECT m.*, (SELECT COUNT(*) FROM measure_entries e WHERE e.measure_id = m.id "
+            "AND e.week_id = ?) AS n FROM measures m ORDER BY m.sort_order, m.id", (week_id or 0,))
+        return [self._measure(r) for r in rows]
+
+    def add_entry(self, measure_id: int, week_id: int, variety_id: int | None = None,
+                  path: str | None = None, caption: str = "", data: dict | None = None) -> int:
+        cur = self.execute(
+            "INSERT INTO measure_entries(measure_id, week_id, variety_id, path, caption, data, "
+            "created_at) VALUES (?,?,?,?,?,?,?)",
+            (measure_id, week_id, variety_id, path, (caption or "").strip(),
+             json.dumps(data or {}, ensure_ascii=False), _now()))
+        return cur.lastrowid
+
+    def update_entry(self, entry_id: int, **fields) -> None:
+        allowed = {"variety_id", "caption", "data"}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(k)
+            if k == "data":
+                v = json.dumps(v or {}, ensure_ascii=False)
+            elif k == "caption":
+                v = (v or "").strip()
+            sets.append(f"{k}=?")
+            vals.append(v)
+        if sets:
+            self.execute(f"UPDATE measure_entries SET {', '.join(sets)} WHERE id=?", (*vals, entry_id))
+
+    def delete_entry(self, entry_id: int) -> None:
+        self.execute("DELETE FROM measure_entries WHERE id=?", (entry_id,))
+
+    def list_entries(self, measure_id: int, week_id: int | None = None,
+                     season: int | None = None) -> list[dict]:
+        """Registros de la medición (de una semana o de toda la temporada), con la
+        semana y el nombre de la variedad."""
+        sql = ("SELECT e.*, w.season, w.week_number, w.start_date, w.label AS week_label, "
+               "v.name AS variety_name FROM measure_entries e "
+               "JOIN sampling_weeks w ON w.id = e.week_id "
+               "LEFT JOIN varieties v ON v.id = e.variety_id WHERE e.measure_id=?")
+        params: list = [measure_id]
+        if week_id is not None:
+            sql += " AND e.week_id=?"
+            params.append(week_id)
+        if season is not None:
+            sql += " AND w.season=?"
+            params.append(season)
+        rows = self.query(sql + " ORDER BY w.start_date, e.created_at, e.id", tuple(params))
+        for r in rows:
+            r["data"] = json.loads(r.get("data") or "{}")
+        return rows
 
     def custom_field_keys(self) -> list[str]:
         return [r["key"] for r in self.query(

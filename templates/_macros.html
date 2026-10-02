@@ -139,3 +139,24 @@
 </script>
 {% endif %}
 {%- endmacro %}
+
+{% macro attach_gallery(items) -%}
+{% if items %}<div class="attach">{% for f in items %}
+  <figure><img src="{{ f.src }}" alt="{{ f.caption or 'Foto adjunta' }}" loading="lazy">
+  <figcaption>{{ f.caption or 'Foto adjunta' }}{% if f.when %}<span class="muted">{{ f.when }}</span>{% endif %}</figcaption></figure>
+{% endfor %}</div>{% endif %}
+{%- endmacro %}
+
+{% macro measures_block(measures, show_week=False, show_variety=True) -%}
+{% for m in measures %}
+<h3 class="measure">{{ m.name }} <span class="muted small">· {{ 'Planilla' if m.kind == 'table' else 'Imágenes' }}</span></h3>
+{% if m.kind == 'table' %}
+<div class="scroll-x"><table>
+  <thead><tr>{% if show_week %}<th>Semana</th>{% endif %}{% if show_variety %}<th>Variedad</th>{% endif %}{% for col in m.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+  <tbody>{% for r in m.rows %}<tr>{% if show_week %}<td>{{ r.week }}</td>{% endif %}{% if show_variety %}<td>{{ r.variety }}</td>{% endif %}{% for v in r['values'] %}<td class="mono">{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table></div>
+{% else %}
+{{ attach_gallery(m.pics) }}
+{% endif %}
+{% endfor %}
+{%- endmacro %}

@@ -772,3 +772,63 @@ def test_ai_knowledge_shared_between_phones(tmp_path):
     assert cb.suggest(str(tmp_path / "a2.jpg"), week_number=10).code is not None
     a.close()
     b.close()
+
+
+def test_weekly_attachments_and_custom_measures(db, tmp_path):
+    """Fotos adjuntas por semana y mediciones propias (imágenes o planilla) → informes,
+    Excel y copia de seguridad."""
+    import re
+    from data_transfer import full_backup, restore
+    from measures_export import as_number, export_measures
+    week = db.current_week(dt.date(2026, 9, 30))
+    v = db.list_varieties()[0]
+    db.get_or_create_observation(v["id"], week["id"])
+    adj = synthetic_photo(55, "canopy", str(tmp_path / "adj.jpg"), 1)
+    db.add_attachment(v["id"], week["season"], adj, "Daño por helada en yemas", week_id=week["id"])
+    assert len(db.list_attachments(v["id"], week_id=week["id"])) == 1
+    assert db.list_attachments(v["id"], week["season"], general=True) == []
+
+    with pytest.raises(ValueError):
+        db.add_measure("Sin columnas", "table", [])
+    tab = db.add_measure("Largo de laterales", "table", ["Planta", "Largo (cm)", "Planta"])
+    assert db.get_measure(tab)["columns"] == ["Planta", "Largo (cm)"]      # sin repetir
+    db.add_entry(tab, week["id"], v["id"], data={"Planta": "1", "Largo (cm)": "23,5"})
+    db.add_entry(tab, week["id"], None, data={"Planta": "2", "Largo (cm)": "19"})
+    img = db.add_measure("Plagas", "images")
+    pimg = synthetic_photo(70, "detail", str(tmp_path / "plaga.jpg"), 2)
+    e = db.add_entry(img, week["id"], path=pimg)
+    db.update_entry(e, caption="Arañita roja", variety_id=v["id"])
+    counts = {m["name"]: m["n"] for m in db.list_measures(week["id"])}
+    assert counts == {"Largo de laterales": 2, "Plagas": 1}
+    db.update_measure(tab, columns=["Planta", "Largo (cm)", "N° frutos"])   # columna nueva
+
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    weekly = open(rep.weekly(week["id"]).path, encoding="utf-8").read()
+    assert "Daño por helada en yemas" in weekly and "Mediciones de la semana" in weekly
+    assert "Largo de laterales" in weekly and "23,5" in weekly and "Arañita roja" in weekly
+    variety = open(rep.variety(v["id"], week["season"]).path, encoding="utf-8").read()
+    assert "Daño por helada en yemas" in variety and "23,5" in variety and "19" not in \
+        re.sub(r"<[^>]+>", " ", variety.split("<h2>Mediciones</h2>")[1])   # solo su variedad
+
+    assert as_number("23,5") == 23.5 and as_number("12") == 12 and as_number("12 cm") is None
+    path = export_measures(db, [tab, img], week["season"], str(tmp_path))
+    with zipfile.ZipFile(path) as zf:
+        names = zf.namelist()
+        s1 = zf.read("xl/worksheets/sheet1.xml").decode()
+        book = zf.read("xl/workbook.xml").decode()
+    assert {"[Content_Types].xml", "xl/workbook.xml", "xl/styles.xml",
+            "xl/worksheets/sheet2.xml"} <= set(names)
+    assert 'name="Largo de laterales"' in book and 'name="Plagas"' in book
+    assert "<v>23.5</v>" in s1 and "N° frutos" in s1 and "Semana del año" in s1 and "<v>40</v>" in s1
+
+    zpath = full_backup(db, str(tmp_path))
+    os.remove(adj)
+    os.remove(pimg)
+    fresh = Database(str(tmp_path / "nuevo.sqlite3"))
+    restore(fresh, zpath)
+    for table in ("variety_attachments", "measure_entries"):
+        paths = [r["path"] for r in fresh.query(f"SELECT path FROM {table} WHERE path IS NOT NULL")]
+        assert paths and all(os.path.exists(p) for p in paths)
+    fresh.close()
+    db.delete_measure(tab)
+    assert db.list_entries(tab) == []
