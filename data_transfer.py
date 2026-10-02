@@ -71,7 +71,7 @@ def full_backup(db, dest_dir: str | None = None) -> str:
     path = os.path.join(dest_dir, f"PhenoRubus_respaldo_{_stamp()}.zip")
     tmp_db = _checkpoint_copy(db, os.path.join(data_subdir("tmp"), DB_NAME))
     manifest = {"app": "PhenoRubus", "created": _dt.datetime.now().isoformat(timespec="seconds"),
-                "photos": {}}
+                "photos": {}, "attachments": {}}
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(tmp_db, DB_NAME)
         for r in db.query("SELECT id, path FROM photos"):
@@ -79,6 +79,11 @@ def full_backup(db, dest_dir: str | None = None) -> str:
                 arc = f"fotos/{r['id']}_{os.path.basename(r['path'])}"
                 zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)  # JPEG ya comprimido
                 manifest["photos"][str(r["id"])] = arc
+        for r in db.query("SELECT id, path FROM variety_attachments"):
+            if os.path.exists(r["path"]):
+                arc = f"adjuntos/{r['id']}_{os.path.basename(r['path'])}"
+                zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)
+                manifest["attachments"][str(r["id"])] = arc
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
     os.remove(tmp_db)
     db.log("backup", "full", None, f"{os.path.basename(path)} · {len(manifest['photos'])} fotos")
@@ -121,7 +126,7 @@ def _validate(path: str) -> None:
 def restore(db, path: str, progress=None) -> RestoreResult:
     """Reemplaza los datos actuales por los del respaldo (.zip o .sqlite3)."""
     tmp = data_subdir("tmp", "restore")
-    manifest = {}
+    manifest, attachments = {}, {}
     zf = None
     if zipfile.is_zipfile(path):
         zf = zipfile.ZipFile(path)
@@ -133,7 +138,9 @@ def restore(db, path: str, progress=None) -> RestoreResult:
         with open(src, "wb") as f:
             f.write(zf.read(db_name))
         if "manifest.json" in names:
-            manifest = json.loads(zf.read("manifest.json")).get("photos", {})
+            full = json.loads(zf.read("manifest.json"))
+            manifest = full.get("photos", {})
+            attachments = full.get("attachments", {})
     else:
         src = path
     _validate(src)
@@ -166,6 +173,13 @@ def restore(db, path: str, progress=None) -> RestoreResult:
                 shutil.copyfileobj(fin, fout)
             _set_path(db, r["id"], dest)
             res.photos_restored += 1
+    for r in db.query("SELECT id, path FROM variety_attachments"):
+        arc = attachments.get(str(r["id"]))
+        if zf is not None and arc and not os.path.exists(r["path"]):
+            dest = os.path.join(data_subdir("photos", "adjuntos"), os.path.basename(arc))
+            with zf.open(arc) as fin, open(dest, "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+            db.execute("UPDATE variety_attachments SET path=? WHERE id=?", (dest, r["id"]))
     if zf is not None:
         zf.close()
     rel = relink_photos(db)

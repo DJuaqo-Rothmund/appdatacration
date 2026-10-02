@@ -677,6 +677,17 @@ class CustomFieldForm(MDBoxLayout):
     pass
 
 
+class AttachmentRow(MDBoxLayout):
+    caption = StringProperty()
+    date = StringProperty()
+    item = ObjectProperty(None, allownone=True)
+    screen = ObjectProperty()
+
+
+class CaptionForm(MDBoxLayout):
+    pass
+
+
 class VarietyScreen(SectorIrrigationMixin, MDScreen):
     variety_id = NumericProperty(0)
     METRICS = ("historical_yield", "projected_yield", "basal_canes", "laterals")
@@ -701,6 +712,7 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
                 self.ids[k].text = m[k]
         self.ids.historical_note.text = m.get("historical_note") or ""
         self.load_custom()
+        self.load_attachments()
 
     def update_photo_hint(self):
         if "photo_hint" not in self.ids:
@@ -780,6 +792,89 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
     def delete_custom(self, field_id: int):
         app().db.delete_custom_field(field_id)
         self.load_custom()
+
+    # ------------------------------------------------------ fotos adjuntas
+    def load_attachments(self):
+        a = app()
+        box = self.ids.attachments
+        fast_clear(box)
+        items = a.db.list_attachments(self.variety_id, a.season)
+        for f in items:
+            row = AttachmentRow(caption=f["caption"] or "", item=f, screen=self,
+                                date=ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10])))
+            row.ids.thumb_box.add_widget(thumb_widget(f["path"], 160))
+            box.add_widget(row)
+        if not items:
+            box.add_widget(MDLabel(text="Sin fotos adjuntas.", font_style="Caption",
+                                   adaptive_height=True, theme_text_color="Custom",
+                                   text_color=c(theme.MUTED)))
+
+    def attach(self, source: str):
+        """Tomar una foto o elegir una o varias de la galería y adjuntarlas a la ficha."""
+        a = app()
+        variety_id, season = self.variety_id, a.season
+        v = a.db.get_variety(variety_id)
+        base = ph.photo_basename(v, _dt.date.today().isoformat(), "attachment")
+
+        def done(result, origin):
+            paths = [p for p in (result if isinstance(result, list) else [result]) if p]
+            if not paths:
+                if origin == "error":
+                    a.toast("No se pudo obtener la foto.")
+                return
+            a.toast("Guardando foto…" if len(paths) == 1 else f"Guardando {len(paths)} fotos…")
+
+            def work():
+                ids, error = [], None
+                try:
+                    dest_dir = data_subdir("photos", f"T{season}", "adjuntos")
+                    for tmp in paths:
+                        path = store_photo(tmp, dest_dir, base, exact=True)
+                        ids.append(a.db.add_attachment(variety_id, season, path,
+                                                       source="camera" if origin == "camera" else "gallery"))
+                        a.thumb(path, 160)
+                        a.backup_attachment(path, season)
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                Clock.schedule_once(lambda *_: stored(ids, error))
+
+            def stored(ids, error):
+                if self.variety_id != variety_id:
+                    return
+                self.load_attachments()
+                if error:
+                    a.toast(f"No se pudo guardar la foto: {error}")
+                elif len(ids) == 1:
+                    self.caption_dialog(a.db.query_one(
+                        "SELECT * FROM variety_attachments WHERE id=?", (ids[0],)))
+
+            a.workers.submit(work)
+
+        if source == "camera":
+            a.media.take_photo(done, base, exact=True)
+        else:
+            a.media.pick_images(done)
+
+    def caption_dialog(self, item: dict | None):
+        if not item:
+            return
+        a = app()
+        form = CaptionForm()
+        form.ids.caption.text = item["caption"] or ""
+
+        def ok(f):
+            a.db.set_attachment_caption(item["id"], f.ids.caption.text)
+            self.load_attachments()
+
+        form_dialog("Descripción de la foto", form, ok)
+
+    def delete_attachment(self, item: dict):
+        def go():
+            app().db.delete_attachment(item["id"])
+            self.load_attachments()
+
+        confirm("Quitar foto adjunta", "La foto deja de aparecer en la ficha de la variedad "
+                "(el archivo se conserva en el teléfono).", [("Quitar", go)])
 
     def report(self):
         self.save()
@@ -1151,10 +1246,17 @@ class ObservationScreen(MDScreen):
             self.obs["id"], bbch_code=code, bbch_label=text, notes=self.ids.notes.text,
             observed_at=_dt.date.today().isoformat(),
             ai_accepted=None if ai_code is None or code is None else int(code == ai_code))
-        if code is not None and a.db.get_setting("ai_auto_learn", False):
-            photo = a.db.get_photos(self.obs["id"]).get("detail")
-            if photo:
-                a.classifier.add_reference(photo["path"], code, photo_id=photo["id"])
+        if code is not None and a.db.get_setting("ai_auto_learn", True):
+            # Aprendizaje continuo: cada foto de detalle del registro (con su estado
+            # confirmado) se suma a la memoria de la IA, en segundo plano.
+            photos = [p for p in a.db.list_photos(self.obs["id"], "detail") if os.path.exists(p["path"])]
+
+            def learn():
+                for p in photos:
+                    a.classifier.add_reference(p["path"], code, photo_id=p["id"])
+
+            if photos:
+                a.workers.submit(learn)
         a.toast("Registro guardado")
         a.back()
 
@@ -1777,6 +1879,10 @@ class SettingsTab(MDScreen):
             if not path.lower().endswith((".zip", ".sqlite3", ".db")):
                 a.toast("Elija la copia .zip o el archivo .sqlite3")
                 return
+            from ai_share import is_knowledge_package
+            if is_knowledge_package(path):
+                a.toast("Ese es un paquete de la IA: impórtelo en el módulo de IA › Modelo")
+                return
             confirm("Restaurar copia de seguridad",
                     f"Se reemplazarán los datos actuales por los de «{name or os.path.basename(path)}». "
                     "Antes se guarda automáticamente una copia de lo actual.",
@@ -2113,7 +2219,7 @@ class AILabScreen(MDScreen):
     # ============================================================ etiquetado
     def refresh_label(self):
         a = app()
-        self.ids.auto_learn.active = bool(a.db.get_setting("ai_auto_learn", False))
+        self.ids.auto_learn.active = bool(a.db.get_setting("ai_auto_learn", True))
         box = self.ids.photos
         fast_clear(box)
         photos = a.db.list_detail_photos(a.season)
@@ -2252,6 +2358,49 @@ class AILabScreen(MDScreen):
         self.ids.try_conf.value = s.confidence
         alts = " · ".join(f"BBCH {code:02d} {p:.0%}" for code, p in s.top[1:])
         self.ids.try_explain.text = f"Confianza {s.confidence:.0%} · alternativas: {alts}\n{s.explanation}"
+
+    # ------------------------------------------- compartir entre teléfonos
+    def export_knowledge(self):
+        a = app()
+        if not a.db.reference_counts():
+            a.toast("Todavía no hay fotos etiquetadas en la memoria de la IA.")
+            return
+        a.toast("Preparando paquete…")
+
+        def work():
+            try:
+                from ai_share import export_knowledge
+                path, n = export_knowledge(a.db)
+                Clock.schedule_once(lambda *_: a.report_actions(
+                    path, "Conocimiento de la IA", f"{n} referencias · ábralo en el otro teléfono "
+                    "con «Importar conocimiento»", viewable=False))
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+                Clock.schedule_once(lambda *_: a.toast(f"No se pudo exportar: {error}"))
+
+        a.workers.submit(work)
+
+    def import_knowledge(self):
+        a = app()
+
+        def picked(path, name):
+            if not path:
+                return
+            a.toast("Sumando conocimiento…")
+
+            def work():
+                try:
+                    from ai_share import import_knowledge
+                    res = import_knowledge(a.db, path, a.classifier)
+                    Clock.schedule_once(lambda *_: (self.refresh_model(),
+                                                    confirm("Conocimiento importado", res.summary(), [])))
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+                    Clock.schedule_once(lambda *_: a.toast(f"No se pudo importar: {error}"))
+
+            a.workers.submit(work)
+
+        a.media.pick_document(picked, exts=(".zip",))
 
     def change_pin(self):
         a = app()

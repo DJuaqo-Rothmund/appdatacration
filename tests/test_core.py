@@ -711,3 +711,64 @@ def test_week_of_year_titles():
     assert ph.week_title("2026-12-28") == "Semana 53, año 2026"
     assert ph.week_title("2027-01-04") == "Semana 1, año 2027"
     assert ph.week_short({"start_date": "2026-09-28"}) == "S40"
+
+
+def test_variety_attachments_in_report_and_backup(db, tmp_path):
+    from data_transfer import full_backup, restore
+    season = 2026
+    v = db.list_varieties()[0]
+    p = synthetic_photo(55, "canopy", str(tmp_path / "adj.jpg"), 1)
+    aid = db.add_attachment(v["id"], season, p, "Daño por helada", source="gallery")
+    db.add_attachment(v["id"], season + 1, p, "otra temporada")
+    assert [a["caption"] for a in db.list_attachments(v["id"], season)] == ["Daño por helada"]
+    db.set_attachment_caption(aid, "  Daño por helada en yemas ")
+    assert db.list_attachments(v["id"], season)[0]["caption"] == "Daño por helada en yemas"
+    assert ph.photo_basename(v, "2026-10-02", "attachment").startswith("02102026-") \
+        and ph.photo_basename(v, "2026-10-02", "attachment").endswith("A")
+    html = open(ReportGenerator(db, str(tmp_path / "out")).variety(v["id"], season).path,
+                encoding="utf-8").read()
+    assert "Fotos adjuntas" in html and "Daño por helada en yemas" in html and "otra temporada" not in html
+
+    zpath = full_backup(db, str(tmp_path))
+    os.remove(p)
+    fresh = Database(str(tmp_path / "nuevo.sqlite3"))
+    restore(fresh, zpath)
+    rows = fresh.query("SELECT path FROM variety_attachments")
+    assert len(rows) == 2 and all(os.path.exists(r["path"]) for r in rows)
+    fresh.close()
+
+    db.delete_attachment(aid)
+    assert db.list_attachments(v["id"], season) == []
+
+
+def test_ai_knowledge_shared_between_phones(tmp_path):
+    """Dos teléfonos independientes intercambian lo aprendido sin duplicar ni borrar."""
+    from ai_share import export_knowledge, import_knowledge
+    a = Database(str(tmp_path / "a.sqlite3"))
+    b = Database(str(tmp_path / "b.sqlite3"))
+    ca, cb = PhenologyClassifier(a, HandcraftedExtractor()), PhenologyClassifier(b, HandcraftedExtractor())
+    for i, code in enumerate((15, 15, 61, 85)):
+        ca.add_reference(synthetic_photo(code, "detail", str(tmp_path / f"a{i}.jpg"), i), code)
+    cb.add_reference(synthetic_photo(71, "detail", str(tmp_path / "b0.jpg"), 9), 71)
+    a.upsert_bbch(61, "Inicio de floración", "10 % de flores abiertas", "flor petalo blanco",
+                  source="user")
+    a.add_document("Guía BBCH frambueso", None, "61 Inicio de floración ...", 1)
+
+    pkg_a, n = export_knowledge(a, str(tmp_path))
+    assert n == 4
+    res = import_knowledge(b, pkg_a, cb)
+    assert res.added == 4 and res.known == 0 and res.documents == 1 and res.stages >= 1
+    assert b.reference_counts() == {15: 2, 61: 1, 71: 1, 85: 1}
+    assert "petalo" in next(s for s in b.list_bbch() if s["code"] == 61)["keywords"]
+    again = import_knowledge(b, pkg_a, cb)                  # mismo paquete: nada nuevo
+    assert again.added == 0 and again.known == 4 and again.documents == 0
+
+    pkg_b, _ = export_knowledge(b, str(tmp_path))           # y de vuelta: ambos iguales
+    back = import_knowledge(a, pkg_b, ca)
+    assert back.added == 1 and a.reference_counts() == b.reference_counts()
+    # Las miniaturas viajan: el otro teléfono puede re-entrenar con sus propias fotos.
+    assert all(r["image_path"] and os.path.exists(r["image_path"])
+               for r in b.list_references() if r["photo_id"] is None)
+    assert cb.suggest(str(tmp_path / "a2.jpg"), week_number=10).code is not None
+    a.close()
+    b.close()

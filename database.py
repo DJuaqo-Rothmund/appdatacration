@@ -8,6 +8,7 @@ Entidades
 varieties        Catálogo dinámico de variedades (CRUD, archivado suave).
 variety_metrics  Parámetros biométricos por variedad y temporada.
 custom_fields    Campos personalizados llave-valor por variedad y temporada.
+variety_attachments  Fotos adjuntas a la ficha de la variedad (con descripción).
 sampling_weeks   Semanas de muestreo (Semana 1 = semana del 7 de septiembre).
 observations     Registro fenológico variedad × semana (BBCH, IA, notas).
 photos           Fotos asociadas a una observación (canopy / detail).
@@ -90,6 +91,16 @@ CREATE TABLE IF NOT EXISTS custom_fields (
     unit        TEXT DEFAULT '',
     updated_at  TEXT NOT NULL,
     UNIQUE (variety_id, season, key)
+);
+
+CREATE TABLE IF NOT EXISTS variety_attachments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    variety_id   INTEGER NOT NULL REFERENCES varieties(id) ON DELETE CASCADE,
+    season       INTEGER NOT NULL,
+    path         TEXT NOT NULL,
+    caption      TEXT DEFAULT '',
+    source       TEXT DEFAULT 'camera',
+    captured_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sampling_weeks (
@@ -456,6 +467,27 @@ class Database:
     def delete_custom_field(self, field_id: int) -> None:
         self.execute("DELETE FROM custom_fields WHERE id=?", (field_id,))
         self.log("delete", "custom_field", field_id)
+
+    # ------------------------------------------------- fotos adjuntas (ficha)
+    def add_attachment(self, variety_id: int, season: int, path: str, caption: str = "",
+                       source: str = "camera") -> int:
+        cur = self.execute(
+            "INSERT INTO variety_attachments(variety_id, season, path, caption, source, captured_at) "
+            "VALUES (?,?,?,?,?,?)", (variety_id, season, path, caption.strip(), source, _now()))
+        self.log("create", "attachment", cur.lastrowid, os.path.basename(path))
+        return cur.lastrowid
+
+    def list_attachments(self, variety_id: int, season: int) -> list[dict]:
+        return self.query("SELECT * FROM variety_attachments WHERE variety_id=? AND season=? "
+                          "ORDER BY captured_at, id", (variety_id, season))
+
+    def set_attachment_caption(self, attachment_id: int, caption: str) -> None:
+        self.execute("UPDATE variety_attachments SET caption=? WHERE id=?",
+                     (caption.strip(), attachment_id))
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        self.execute("DELETE FROM variety_attachments WHERE id=?", (attachment_id,))
+        self.log("delete", "attachment", attachment_id)
 
     def custom_field_keys(self) -> list[str]:
         return [r["key"] for r in self.query(

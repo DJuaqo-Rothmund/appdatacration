@@ -305,14 +305,14 @@ class FenoRubusApp(MDApp):
                             info=f"{os.path.basename(res.path)} · {res.size_kb} KB")
 
     # ------------------------------------------- enviar / guardar informes
-    def report_actions(self, path: str, title: str = "Informe", info: str = ""):
+    def report_actions(self, path: str, title: str = "Informe", info: str = "", viewable: bool = True):
         """Menú: WhatsApp, correo, guardar en el teléfono, ver u otras apps."""
         from ui.screens import pick_dialog
         size_mb = os.path.getsize(path) / 1e6
         heavy = size_mb > 20
         mail_note = (f"{size_mb:.0f} MB: puede superar el límite de adjuntos (use ZIP)" if heavy
                      else "Gmail, Outlook u otra app de correo")
-        pick_dialog(f"{title}" + (f"\n{info}" if info else ""), [
+        options = [
             ("WhatsApp", "Enviar como documento", lambda: self.share_file(path, target="whatsapp")),
             ("Correo electrónico", mail_note, lambda: self.send_email(path)),
             ("Guardar en el teléfono", "Descargas › PhenoRubus", lambda: self.save_file(path)),
@@ -321,7 +321,10 @@ class FenoRubusApp(MDApp):
              lambda: self.save_to_drive(path)),
             ("Ver informe", "Abrir en el navegador", lambda: self.open_file(path)),
             ("Otras apps…", "Drive, Telegram, Bluetooth…", lambda: self.share_file(path)),
-        ])
+        ]
+        if not viewable:
+            options = [o for o in options if o[0] != "Ver informe"]
+        pick_dialog(f"{title}" + (f"\n{info}" if info else ""), options)
 
     def _mime(self, path: str) -> str:
         return MIME.get(os.path.splitext(path)[1], "*/*")
@@ -396,6 +399,12 @@ class FenoRubusApp(MDApp):
         if not self.db.get_setting("drive_enabled", False):
             return
         self.drive.enqueue(photo_id, path)
+
+    def backup_attachment(self, path: str, season: int) -> None:
+        """Foto adjunta a la ficha de una variedad → «Año …/Fotos de variedades» en Drive."""
+        if not self.db.get_setting("drive_enabled", False):
+            return
+        self.drive.enqueue(None, path, remote=f"Año {season}/Fotos de variedades/{os.path.basename(path)}")
 
     def _check_reminder(self):
         if self.reminders.check_due():

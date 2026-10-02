@@ -452,6 +452,10 @@ class ReportGenerator:
                                "week": self._wlabel(season)(hit[0]) if hit else None})
         metrics = self.db.get_metrics(variety_id, season)
         custom = self.db.list_custom_fields(variety_id, season)
+        attachments = [{"src": src, "caption": f["caption"] or "",
+                        "date": ph.format_date_es(_dt.date.fromisoformat(f["captured_at"][:10]))}
+                       for f in self.db.list_attachments(variety_id, season)
+                       for src in [images.src(f["path"], 720)] if src]
         all_weeks = self.db.list_weeks(season, include_skipped=False)
         compare = self._compare(self._heatmap(season, all_weeks, self.db.list_varieties()),
                                 all_weeks, [variety_id])
@@ -459,7 +463,7 @@ class ReportGenerator:
         return self._render(
             "variety.html", f"variedad_{slugify(v['name'])}_{season}", "variedad", title,
             images, package, variety=v, timeline=timeline, chart=chart, metrics=metrics,
-            compare=compare,
+            compare=compare, attachments=attachments,
             custom=custom, milestones=milestones,
             subtitle=f"Timeline longitudinal · {ph.season_title(season)}")
 

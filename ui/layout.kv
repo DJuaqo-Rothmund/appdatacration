@@ -1445,6 +1445,27 @@
                         icon: "plus"
                         text: "Agregar campo"
                         on_release: root.custom_dialog()
+                PaperCard:
+                    SectionLabel:
+                        text: "FOTOS ADJUNTAS"
+                    Muted:
+                        text: "Fotos de la variedad con una descripción (ej.: daño por helada, calibre de fruto, estado de cañas). Aparecen en la ficha (informe por variedad)."
+                    MDBoxLayout:
+                        id: attachments
+                        orientation: "vertical"
+                        adaptive_height: True
+                        spacing: dp(6)
+                    MDBoxLayout:
+                        adaptive_height: True
+                        spacing: dp(8)
+                        GhostButton:
+                            icon: "camera-outline"
+                            text: "Tomar foto"
+                            on_release: root.attach("camera")
+                        GhostButton:
+                            icon: "image-multiple-outline"
+                            text: "Desde galería"
+                            on_release: root.attach("gallery")
                 PrimaryButton:
                     text: "Guardar ficha"
                     on_release: root.save()
@@ -1483,6 +1504,50 @@
         theme_icon_color: "Custom"
         icon_color: c(theme.BERRY)
         on_release: root.screen.delete_custom(root.field_id)
+
+<AttachmentRow>:
+    adaptive_height: True
+    spacing: dp(8)
+    padding: dp(2), dp(2)
+    MDBoxLayout:
+        id: thumb_box
+        size_hint: None, None
+        size: dp(64), dp(64)
+    MDBoxLayout:
+        orientation: "vertical"
+        adaptive_height: True
+        pos_hint: {"center_y": .5}
+        MDLabel:
+            text: root.caption or "Sin descripción"
+            font_style: "Body2"
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.INK if root.caption else theme.MUTED)
+        MDLabel:
+            text: root.date
+            font_style: "Caption"
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.MUTED)
+    MDIconButton:
+        icon: "pencil-outline"
+        pos_hint: {"center_y": .5}
+        on_release: root.screen.caption_dialog(root.item)
+    MDIconButton:
+        icon: "close"
+        pos_hint: {"center_y": .5}
+        theme_icon_color: "Custom"
+        icon_color: c(theme.BERRY)
+        on_release: root.screen.delete_attachment(root.item)
+
+<CaptionForm>:
+    orientation: "vertical"
+    adaptive_height: True
+    spacing: dp(8)
+    padding: 0, dp(8), 0, 0
+    Field:
+        id: caption
+        hint_text: "Descripción (opcional)"
 
 <CustomFieldForm>:
     orientation: "vertical"
@@ -1912,6 +1977,18 @@
                                 icon: "image-search-outline"
                                 text: "Elegir foto y analizar"
                                 on_release: root.try_photo()
+                        MindCard:
+                            MindSection:
+                                text: "COMPARTIR CON OTRO TELÉFONO"
+                            MindMuted:
+                                text: "Exporte lo aprendido (fotos etiquetadas, escala BBCH y documentos) y envíelo por WhatsApp, correo o Drive. En el otro teléfono use «Importar»: se suma a lo que ya sabe, sin borrar ni duplicar. Hágalo en ambos sentidos y las dos IA quedan iguales."
+                            MindButton:
+                                text: "Exportar conocimiento"
+                                on_release: root.export_knowledge()
+                            MindGhost:
+                                icon: "database-import-outline"
+                                text: "Importar conocimiento de otro teléfono"
+                                on_release: root.import_knowledge()
                         MindCard:
                             MindSection:
                                 text: "MEMORIA POR ESTADO BBCH"

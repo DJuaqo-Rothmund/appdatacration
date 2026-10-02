@@ -276,7 +276,7 @@ def expected_bbch_for_week(week_number: int) -> float:
 # p. ej. 28092026-C11G o 28092026-C11S1ER2G
 # (fecha = inicio de la semana de muestreo; G = general/canopia, D = detalle).
 # ---------------------------------------------------------------------------
-PHOTO_KIND_LETTER = {"canopy": "G", "detail": "D"}
+PHOTO_KIND_LETTER = {"canopy": "G", "detail": "D", "attachment": "A"}   # A = adjunta a la ficha
 
 
 def variety_tag(name: str, code: str | None = None) -> str:

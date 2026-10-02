@@ -19,6 +19,18 @@
 </div>
 {% endif %}
 
+{% if attachments %}
+<h2>Fotos adjuntas</h2>
+<div class="attach">
+{% for f in attachments %}
+  <figure class="card" style="padding: 8px;">
+    <img src="{{ f.src }}" alt="{{ f.caption or 'Foto adjunta' }}" loading="lazy">
+    <figcaption>{{ f.caption or 'Sin descripción' }}<span class="muted">{{ f.date }}</span></figcaption>
+  </figure>
+{% endfor %}
+</div>
+{% endif %}
+
 <h2>Progresión fenológica</h2>
 {% if chart %}
 {% if compare %}{{ compare_chart(compare, "cmp-variety") }}{% else %}<div class="card" style="padding: 12px;">{{ chart|safe }}</div>{% endif %}
