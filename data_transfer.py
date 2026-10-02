@@ -215,7 +215,8 @@ TIME_WINDOW_BEFORE = _dt.timedelta(minutes=20)
 TIME_WINDOW_AFTER = _dt.timedelta(minutes=2)
 
 
-# Nombre actual «28092026-C11G.jpg» («-2», «-3»… o « (1)» si Android lo duplicó).
+# Nombre «20260928-C11G.jpg» (o el anterior «28092026-C11G.jpg»; «-2», «-3»… o « (1)»
+# si Android lo duplicó).
 _DATED_RE = re.compile(r"^(?P<key>\d{8}-[A-Za-z0-9]+[GD])(?:-(?P<seq>\d+))?(?: \((?P<dup>\d+)\))?\.jpe?g$",
                        re.IGNORECASE)
 
@@ -269,9 +270,10 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
         "JOIN varieties v ON v.id = o.variety_id JOIN sampling_weeks w ON w.id = o.week_id "
         "ORDER BY p.id")
 
-    def base_name(r):
+    def base_name(r, legacy=False):
         return ph.photo_basename({"name": r["variety"], "code": r["vcode"], "sector": r["vsector"],
-                                  "irrigation": r["virrigation"]}, r["start_date"], r["kind"])
+                                  "irrigation": r["virrigation"]}, r["start_date"], r["kind"],
+                                 legacy=legacy)
 
     def link(r, src):
         used.add(src)
@@ -282,8 +284,10 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
     for r in rows:
         if os.path.exists(r["path"]):
             continue
-        # 1) Nombre actual «28092026-C11G» (fecha de la semana + variedad + G/D).
-        cands = [c for c in dated.get(base_name(r).lower(), []) if c[1] not in used]
+        # 1) Nombre «20260928-C11G» (fecha de la semana + variedad + G/D), o el de las
+        #    versiones hasta la 1.1.30 con la fecha al revés: «28092026-C11G».
+        cands = [c for key in (base_name(r), base_name(r, legacy=True))
+                 for c in dated.get(key.lower(), []) if c[1] not in used]
         if cands:
             link(r, cands[0][1])
             relinked += 1

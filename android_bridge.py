@@ -194,7 +194,7 @@ class AndroidMedia:
                    exact: bool = False) -> None:
         """La cámara escribe la foto original directamente en «Imágenes de Fenología».
 
-        exact=True: el archivo se llama exactamente `name_hint`.jpg (p. ej. 28092026-C11G.jpg).
+        exact=True: el archivo se llama exactamente `name_hint`.jpg (p. ej. 20260928-C11G.jpg).
         """
         from jnius import autoclass, cast  # type: ignore
         values = self.ContentValues()
@@ -404,6 +404,58 @@ class AndroidMedia:
         chooser = self.Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
         self.activity.startActivity(chooser)
 
+    def rename_public_legacy(self) -> tuple[int, int]:
+        """Fotos de «Imágenes de Fenología» con nombre antiguo (ddmmaaaa-…) -> aaaammdd-….
+        Solo puede renombrar las que creó la app (tras reinstalarla, Android lo impide)."""
+        from jnius import autoclass  # type: ignore
+        from photo_rename import new_name
+        ok = failed = 0
+        if self.api < 29:   # Android 8-9: archivos directos (WRITE_EXTERNAL_STORAGE)
+            Environment = autoclass("android.os.Environment")
+            folder = os.path.join(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_PICTURES).getAbsolutePath(), PUBLIC_PHOTO_DIR)
+            done = []
+            for name in os.listdir(folder) if os.path.isdir(folder) else []:
+                nn = new_name(name)
+                if nn and not os.path.exists(os.path.join(folder, nn)):
+                    try:
+                        os.rename(os.path.join(folder, name), os.path.join(folder, nn))
+                        done += [os.path.join(folder, name), os.path.join(folder, nn)]
+                        ok += 1
+                    except OSError:
+                        failed += 1
+            if done:
+                autoclass("android.media.MediaScannerConnection").scanFile(
+                    self.activity, done, None, None)
+            return ok, failed
+        ContentUris = autoclass("android.content.ContentUris")
+        base = self.ImagesMedia.EXTERNAL_CONTENT_URI
+        cursor = self.resolver.query(base, None, f"{self.MediaColumns.RELATIVE_PATH} LIKE ?",
+                                     [f"Pictures/{PUBLIC_PHOTO_DIR}%"], None)
+        items = []
+        if cursor is not None:
+            try:
+                i_id = cursor.getColumnIndex("_id")
+                i_name = cursor.getColumnIndex(self.MediaColumns.DISPLAY_NAME)
+                while cursor.moveToNext():
+                    items.append((cursor.getLong(i_id), cursor.getString(i_name) or ""))
+            finally:
+                cursor.close()
+        taken = {name for _id, name in items}
+        for media_id, name in items:
+            nn = new_name(name)
+            if not nn or nn in taken:
+                continue
+            values = self.ContentValues()
+            values.put(self.MediaColumns.DISPLAY_NAME, nn)
+            try:
+                self.resolver.update(ContentUris.withAppendedId(base, media_id), values, None, None)
+                taken.add(nn)
+                ok += 1
+            except Exception:  # noqa: BLE001 - foto que la app ya no «posee» (reinstalación)
+                failed += 1
+        return ok, failed
+
     def email_apps(self) -> list[tuple[str, str]]:
         """[(nombre visible, paquete)] de las apps de correo instaladas (Gmail, Outlook…).
         Requiere el <queries> de android/extra_manifest.xml (Android 11+)."""
@@ -589,6 +641,17 @@ class DesktopMedia:
 
     def save_public(self, path: str, mime: str) -> str:
         return self.export_to_downloads(path, mime)
+
+    def rename_public_legacy(self) -> tuple[int, int]:
+        from photo_rename import new_name
+        folder = os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)
+        ok = 0
+        for name in os.listdir(folder) if os.path.isdir(folder) else []:
+            nn = new_name(name)
+            if nn and not os.path.exists(os.path.join(folder, nn)):
+                os.rename(os.path.join(folder, name), os.path.join(folder, nn))
+                ok += 1
+        return ok, 0
 
     def email_apps(self) -> list[tuple[str, str]]:
         return []

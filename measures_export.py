@@ -139,7 +139,8 @@ def measure_rows(db, measure: dict, season: int | None = None) -> list[list]:
         head += measure["columns"]
         # Columnas que ya no están en la definición, pero tienen datos: no se pierden.
         extra = []
-        entries = db.list_entries(measure["id"], season=season)
+        entries = [e for e in db.list_entries(measure["id"], season=season)
+                   if any(str(v).strip() for v in e["data"].values())]   # sin filas vacías
         for e in entries:
             for k in e["data"]:
                 if k not in measure["columns"] and k not in extra:

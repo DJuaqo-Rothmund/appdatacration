@@ -541,7 +541,7 @@ class Database:
             raise ValueError("Tipo de medición desconocido.")
         cols = [c.strip() for c in (columns or []) if c and c.strip()]
         if kind == "table" and not cols:
-            raise ValueError("La planilla necesita al menos una columna.")
+            cols = list(self.DEFAULT_COLUMNS)   # planilla nueva: se nombran luego en la grilla
         order = (self.query_one("SELECT MAX(sort_order) AS m FROM measures") or {}).get("m") or 0
         cur = self.execute(
             "INSERT INTO measures(name, kind, columns, sort_order, created_at) VALUES (?,?,?,?,?)",
@@ -562,6 +562,58 @@ class Database:
             self.execute("UPDATE measures SET columns=? WHERE id=?",
                          (json.dumps(cols, ensure_ascii=False), measure_id))
 
+    DEFAULT_COLUMNS = ["Columna 1", "Columna 2", "Columna 3"]
+
+    def add_measure_column(self, measure_id: int, name: str | None = None) -> str:
+        """Agrega una columna al final (nombre automático «Columna N» si no se indica)."""
+        m = self.get_measure(measure_id)
+        cols = m["columns"]
+        if name is None or not name.strip():
+            n = len(cols) + 1
+            while f"Columna {n}" in cols:
+                n += 1
+            name = f"Columna {n}"
+        name = name.strip()
+        if name in cols:
+            raise ValueError(f"Ya existe la columna «{name}».")
+        self.update_measure(measure_id, columns=cols + [name])
+        return name
+
+    def rename_measure_column(self, measure_id: int, old: str, new: str) -> None:
+        """Renombra la columna y mueve sus datos en todas las semanas."""
+        new = (new or "").strip()
+        m = self.get_measure(measure_id)
+        if not new:
+            raise ValueError("El nombre de la columna no puede quedar vacío.")
+        if new == old:
+            return
+        if new in m["columns"]:
+            raise ValueError(f"Ya existe la columna «{new}».")
+        cols = [new if col == old else col for col in m["columns"]]
+        with self._lock:
+            self.update_measure(measure_id, columns=cols)
+            for e in self.query("SELECT id, data FROM measure_entries WHERE measure_id=?", (measure_id,)):
+                data = json.loads(e["data"] or "{}")
+                if old in data:
+                    data = {(new if k == old else k): v for k, v in data.items()}
+                    self.execute("UPDATE measure_entries SET data=? WHERE id=?",
+                                 (json.dumps(data, ensure_ascii=False), e["id"]))
+
+    def delete_measure_column(self, measure_id: int, name: str) -> None:
+        """Elimina la columna y sus datos (debe quedar al menos una)."""
+        m = self.get_measure(measure_id)
+        cols = [col for col in m["columns"] if col != name]
+        if not cols:
+            raise ValueError("La planilla debe tener al menos una columna.")
+        with self._lock:
+            self.update_measure(measure_id, columns=cols)
+            for e in self.query("SELECT id, data FROM measure_entries WHERE measure_id=?", (measure_id,)):
+                data = json.loads(e["data"] or "{}")
+                if name in data:
+                    data.pop(name)
+                    self.execute("UPDATE measure_entries SET data=? WHERE id=?",
+                                 (json.dumps(data, ensure_ascii=False), e["id"]))
+
     def delete_measure(self, measure_id: int) -> None:
         self.execute("DELETE FROM measures WHERE id=?", (measure_id,))
         self.log("delete", "measure", measure_id)
@@ -573,7 +625,8 @@ class Database:
         """Mediciones definidas; con week_id agrega «n» = registros de esa semana."""
         rows = self.query(
             "SELECT m.*, (SELECT COUNT(*) FROM measure_entries e WHERE e.measure_id = m.id "
-            "AND e.week_id = ?) AS n FROM measures m ORDER BY m.sort_order, m.id", (week_id or 0,))
+            "AND e.week_id = ? AND (e.path IS NOT NULL OR e.data NOT IN ('', '{}'))) AS n "
+            "FROM measures m ORDER BY m.sort_order, m.id", (week_id or 0,))
         return [self._measure(r) for r in rows]
 
     def add_entry(self, measure_id: int, week_id: int, variety_id: int | None = None,

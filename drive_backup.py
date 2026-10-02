@@ -575,6 +575,30 @@ class DriveBackup:
                 self.db.set_setting("drive_folders", {})
             raise
 
+    def rename_legacy(self) -> int:
+        """Fotos ya subidas con el nombre antiguo «ddmmaaaa-…»: se renombran en Drive a
+        «aaaammdd-…» (la app solo puede tocar los archivos que ella misma subió)."""
+        from photo_rename import new_name
+        done = 0
+        for r in self.db.query("SELECT id, name, drive_id FROM drive_queue "
+                               "WHERE status='done' AND drive_id IS NOT NULL"):
+            head, _, base = (r["name"] or "").rpartition("/")
+            nn = new_name(base)
+            if not nn:
+                continue
+            try:
+                self._call("PATCH", f"{API}/{r['drive_id']}?fields=id",
+                           json.dumps({"name": nn}).encode(), "application/json; charset=UTF-8")
+                done += 1
+            except DriveError as exc:
+                if exc.status not in (403, 404):   # 404: ya no está en Drive; 403: no es de la app
+                    raise
+            self.db.execute("UPDATE drive_queue SET name=? WHERE id=?",
+                            (f"{head}/{nn}" if head else nn, r["id"]))
+        if done:
+            self.db.log("rename", "drive", None, f"{done} fotos renombradas en Drive (aaaammdd)")
+        return done
+
     # --------------------------------------------------------------- envío
     def flush_async(self) -> None:
         if self.enabled:
@@ -596,6 +620,9 @@ class DriveBackup:
         uploaded = 0
         self.running = True
         try:
+            if self.wifi_only and self.metered():
+                raise Offline("Esperando Wi-Fi (datos móviles desactivados para el respaldo)")
+            self.rename_legacy()   # nombres antiguos ya subidos -> aaaammdd (una sola vez)
             while True:
                 self._again = False
                 if self.wifi_only and self.metered():

@@ -272,9 +272,10 @@ def expected_bbch_for_week(week_number: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Nombre de archivo de las fotos: «ddmmaaaa-<Variedad>[S<sector>][ER<riego>]<G|D>»,
-# p. ej. 28092026-C11G o 28092026-C11S1ER2G
+# Nombre de archivo de las fotos: «aaaammdd-<Variedad>[S<sector>][ER<riego>]<G|D>»,
+# p. ej. 20260928-C11G o 20260928-C11S1ER2G — año-mes-día: se ordenan por fecha.
 # (fecha = inicio de la semana de muestreo; G = general/canopia, D = detalle).
+# Hasta la 1.1.30 la fecha iba al revés (ddmmaaaa: 28092026-C11G): legacy=True.
 # ---------------------------------------------------------------------------
 PHOTO_KIND_LETTER = {"canopy": "G", "detail": "D", "attachment": "A"}   # A = adjunta a la ficha
 
@@ -312,10 +313,22 @@ def location_tag(variety: dict) -> str:
     return out
 
 
-def photo_basename(variety: dict, week_start, kind: str, seq: int = 1) -> str:
+PHOTO_DATE_FMT, LEGACY_PHOTO_DATE_FMT = "%Y%m%d", "%d%m%Y"
+
+
+def photo_date(day) -> str:
+    """«20260928»: fecha para nombres de archivo (año, mes, día)."""
+    import datetime as _d
+    if isinstance(day, str):
+        day = _d.date.fromisoformat(day[:10])
+    return day.strftime(PHOTO_DATE_FMT)
+
+
+def photo_basename(variety: dict, week_start, kind: str, seq: int = 1, legacy: bool = False) -> str:
     import datetime as _d
     if isinstance(week_start, str):
         week_start = _d.date.fromisoformat(week_start[:10])
-    base = f"{week_start:%d%m%Y}-{variety_tag(variety.get('name', ''), variety.get('code'))}" \
+    date = week_start.strftime(LEGACY_PHOTO_DATE_FMT if legacy else PHOTO_DATE_FMT)
+    base = f"{date}-{variety_tag(variety.get('name', ''), variety.get('code'))}" \
            f"{location_tag(variety)}{PHOTO_KIND_LETTER.get(kind, 'X')}"
     return base if seq <= 1 else f"{base}-{seq}"

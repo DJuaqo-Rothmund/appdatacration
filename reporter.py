@@ -344,6 +344,8 @@ class ReportGenerator:
             entries = self.db.list_entries(m["id"], week_id=week_id, season=season)
             if variety_id is not None:
                 entries = [e for e in entries if e["variety_id"] == variety_id]
+            if m["kind"] == "table":   # filas sin datos (agregadas y no completadas)
+                entries = [e for e in entries if any(str(v).strip() for v in e["data"].values())]
             if not entries:
                 continue
             if m["kind"] == "table":

@@ -514,13 +514,13 @@ def test_photo_names_date_variety_kind(db, tmp_path):
     import shutil
     from android_bridge import store_photo
     from data_transfer import relink_photos
-    assert ph.photo_basename({"name": "Código 11", "code": "C11"}, "2026-09-28", "canopy") == "28092026-C11G"
-    assert ph.photo_basename({"name": "Meeker", "code": "MEE"}, "2026-09-21", "detail") == "21092026-MeeD"
-    assert ph.photo_basename({"name": "Tulameen", "code": ""}, "2026-09-21", "detail", 2) == "21092026-TulD-2"
+    assert ph.photo_basename({"name": "Código 11", "code": "C11"}, "2026-09-28", "canopy") == "20260928-C11G"
+    assert ph.photo_basename({"name": "Meeker", "code": "MEE"}, "2026-09-21", "detail") == "20260921-MeeD"
+    assert ph.photo_basename({"name": "Tulameen", "code": ""}, "2026-09-21", "detail", 2) == "20260921-TulD-2"
     src = synthetic_photo(55, "detail", str(tmp_path / "s.jpg"), 0)
     out = tmp_path / "out"
-    names = [os.path.basename(store_photo(src, str(out), "21092026-MeeD", exact=True)) for _ in range(3)]
-    assert names == ["21092026-MeeD.jpg", "21092026-MeeD-2.jpg", "21092026-MeeD-3.jpg"]
+    names = [os.path.basename(store_photo(src, str(out), "20260921-MeeD", exact=True)) for _ in range(3)]
+    assert names == ["20260921-MeeD.jpg", "20260921-MeeD-2.jpg", "20260921-MeeD-3.jpg"]
 
     # Restaurar: se reconocen los nombres nuevos en la carpeta pública.
     db.ensure_weeks(2026, 3)
@@ -539,6 +539,14 @@ def test_photo_names_date_variety_kind(db, tmp_path):
     assert res["relinked"] == 2 and res["missing"] == 0
     got = [os.path.basename(db.query_one("SELECT path FROM photos WHERE id=?", (i,))["path"]) for i in ids]
     assert got == [f"{base}.jpg", f"{base}-2.jpg"]
+    # Galería con el nombre antiguo (ddmmaaaa, hasta la 1.1.30): también se reconoce.
+    legacy = ph.photo_basename(v, w["start_date"], "canopy", legacy=True)
+    assert legacy != ph.photo_basename(v, w["start_date"], "canopy")
+    shutil.copyfile(synthetic_photo(30, "canopy", str(tmp_path / "c.jpg"), 5), public / f"{legacy}.jpg")
+    cid = db.add_photo(obs["id"], "canopy", str(tmp_path / "borrada_c.jpg"), "camera")
+    assert relink_photos(db, [str(public)])["relinked"] == 1
+    assert os.path.basename(db.query_one("SELECT path FROM photos WHERE id=?", (cid,))["path"]) == \
+        ph.photo_basename(v, w["start_date"], "canopy") + ".jpg"            # guardada con el nuevo
 
 
 def test_drive_connect_errors_are_explained_and_logged(db):
@@ -579,11 +587,11 @@ def test_v3_sector_irrigation_gps_and_names(db, tmp_path):
     assert {"sector", "irrigation"} <= cols
     d.update_variety(vid, sector=1, irrigation=2)
     v = d.get_variety(vid)
-    assert ph.photo_basename(v, "2026-09-28", "canopy") == f"28092026-{ph.variety_tag(v['name'], v['code'])}S1ER2G"
+    assert ph.photo_basename(v, "2026-09-28", "canopy") == f"20260928-{ph.variety_tag(v['name'], v['code'])}S1ER2G"
     d.close()
 
     # Solo equipo de riego / sin nada
-    assert ph.photo_basename({"name": "Meeker", "code": "MEE", "irrigation": 3}, "2026-09-21", "detail") == "21092026-MeeER3D"
+    assert ph.photo_basename({"name": "Meeker", "code": "MEE", "irrigation": 3}, "2026-09-21", "detail") == "20260921-MeeER3D"
     new_id = db.add_variety("Tulameen", code="TUL", sector=10, irrigation=4)
     assert ph.location_tag(db.get_variety(new_id)) == "S10ER4"
 
@@ -723,7 +731,7 @@ def test_variety_attachments_in_report_and_backup(db, tmp_path):
     assert [a["caption"] for a in db.list_attachments(v["id"], season)] == ["Daño por helada"]
     db.set_attachment_caption(aid, "  Daño por helada en yemas ")
     assert db.list_attachments(v["id"], season)[0]["caption"] == "Daño por helada en yemas"
-    assert ph.photo_basename(v, "2026-10-02", "attachment").startswith("02102026-") \
+    assert ph.photo_basename(v, "2026-10-02", "attachment").startswith("20261002-") \
         and ph.photo_basename(v, "2026-10-02", "attachment").endswith("A")
     html = open(ReportGenerator(db, str(tmp_path / "out")).variety(v["id"], season).path,
                 encoding="utf-8").read()
@@ -788,12 +796,24 @@ def test_weekly_attachments_and_custom_measures(db, tmp_path):
     assert len(db.list_attachments(v["id"], week_id=week["id"])) == 1
     assert db.list_attachments(v["id"], week["season"], general=True) == []
 
+    blank = db.add_measure("Planilla nueva", "table")              # columnas por defecto
+    assert db.get_measure(blank)["columns"] == ["Columna 1", "Columna 2", "Columna 3"]
+    assert db.add_measure_column(blank) == "Columna 4"
+    db.add_entry(blank, week["id"], data={"Columna 1": "5"})
+    db.add_entry(blank, week["id"], data={})                          # fila vacía: no cuenta
+    db.rename_measure_column(blank, "Columna 1", "Altura (cm)")
+    assert db.get_measure(blank)["columns"][0] == "Altura (cm)"
+    assert db.list_entries(blank)[0]["data"] == {"Altura (cm)": "5"}  # el dato se mueve
     with pytest.raises(ValueError):
-        db.add_measure("Sin columnas", "table", [])
+        db.rename_measure_column(blank, "Columna 2", "Altura (cm)")   # nombre repetido
+    db.delete_measure_column(blank, "Altura (cm)")
+    assert db.list_entries(blank)[0]["data"] == {}
+    db.delete_measure(blank)
     tab = db.add_measure("Largo de laterales", "table", ["Planta", "Largo (cm)", "Planta"])
     assert db.get_measure(tab)["columns"] == ["Planta", "Largo (cm)"]      # sin repetir
     db.add_entry(tab, week["id"], v["id"], data={"Planta": "1", "Largo (cm)": "23,5"})
     db.add_entry(tab, week["id"], None, data={"Planta": "2", "Largo (cm)": "19"})
+    db.add_entry(tab, week["id"], None, data={})                      # fila agregada y vacía
     img = db.add_measure("Plagas", "images")
     pimg = synthetic_photo(70, "detail", str(tmp_path / "plaga.jpg"), 2)
     e = db.add_entry(img, week["id"], path=pimg)
@@ -832,3 +852,66 @@ def test_weekly_attachments_and_custom_measures(db, tmp_path):
     fresh.close()
     db.delete_measure(tab)
     assert db.list_entries(tab) == []
+
+
+def test_photo_names_year_month_day_and_rename_existing(db, tmp_path):
+    """Nombres aaaammdd (20260928-C11G) y paso de las fotos ya existentes (28092026-C11G):
+    archivos de la app + base, cola de Drive y archivos ya subidos a Drive."""
+    import json
+    from drive_backup import DriveBackup
+    from photo_rename import migrate_local, new_name
+    assert new_name("28092026-C11G.jpg") == "20260928-C11G.jpg"
+    assert new_name("28092026-C11S1ER2G-2.jpg") == "20260928-C11S1ER2G-2.jpg"
+    assert new_name("20260928-C11G.jpg") is None          # ya está en el formato nuevo
+    assert new_name("20261231-MeeD.jpg") is None and new_name("semanal_2026_S40.html") is None
+    assert ph.photo_basename({"name": "Meeker", "code": "MEE"}, "2026-09-21", "detail",
+                             legacy=True) == "21092026-MeeD"
+
+    week = db.current_week(dt.date(2026, 9, 30))
+    v = db.list_varieties()[0]
+    obs = db.get_or_create_observation(v["id"], week["id"])
+    old = synthetic_photo(55, "canopy", str(tmp_path / "28092026-C11G.jpg"), 1)
+    keep = synthetic_photo(55, "detail", str(tmp_path / "20260928-C11D.jpg"), 2)
+    pid = db.add_photo(obs["id"], "canopy", old)
+    db.add_photo(obs["id"], "detail", keep)
+    att = synthetic_photo(40, "canopy", str(tmp_path / "28092026-C11A.jpg"), 3)
+    db.add_attachment(v["id"], 2026, att, "x", week_id=week["id"])
+    # Ya subida a Drive con el nombre antiguo, y otra en cola.
+    db.execute("INSERT INTO drive_queue(photo_id, path, name, status, drive_id, created_at) "
+               "VALUES (?,?,?,?,?,?)", (pid, old, "Año 2026/Semana 40/28092026-C11G.jpg", "done",
+                                        "f9", "2026-09-28T10:00:00"))
+    db.execute("INSERT INTO drive_queue(photo_id, path, name, created_at) VALUES (NULL,?,?,?)",
+               (att, "Año 2026/Semana 40/Adjuntas/28092026-C11A.jpg", "2026-09-28T10:00:00"))
+
+    res = migrate_local(db)
+    assert res == {"renamed": 2, "missing": 0}
+    names = sorted(os.path.basename(r["path"]) for r in db.query("SELECT path FROM photos"))
+    assert names == ["20260928-C11D.jpg", "20260928-C11G.jpg"]
+    assert os.path.exists(tmp_path / "20260928-C11G.jpg") and not os.path.exists(old)
+    assert os.path.basename(db.query_one("SELECT path FROM variety_attachments")["path"]) == "20260928-C11A.jpg"
+    pending = db.query_one("SELECT * FROM drive_queue WHERE status='pending'")
+    assert pending["name"].endswith("/Adjuntas/20260928-C11A.jpg") and os.path.exists(pending["path"])
+    assert migrate_local(db) == {"renamed": 0, "missing": 0}            # idempotente
+
+    patched = []
+
+    def transport(method, url, headers, body):
+        if method == "PATCH":
+            patched.append((url, json.loads(body)))
+            return 200, b'{"id": "f9"}'
+        if method == "GET":
+            return 200, b'{"files": []}'
+        return 200, json.dumps({"id": f"x{len(patched)}"}).encode()
+
+    class Auth:
+        def get_token(self, interactive):
+            return "t"
+
+    db.set_setting("drive_enabled", True)
+    drive = DriveBackup(db, authorizer=Auth(), transport=transport, metered=lambda: False)
+    drive.flush()
+    assert patched == [("https://www.googleapis.com/drive/v3/files/f9?fields=id",
+                        {"name": "20260928-C11G.jpg"})]
+    assert db.query_one("SELECT name FROM drive_queue WHERE drive_id='f9'")["name"].endswith("/20260928-C11G.jpg")
+    drive.flush()
+    assert len(patched) == 1                                           # una sola vez

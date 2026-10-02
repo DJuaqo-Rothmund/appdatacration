@@ -1166,7 +1166,7 @@ class ObservationScreen(MDScreen):
             a.workers.submit(work)
 
         if source == "camera":
-            # Mismo nombre que en la app y en Drive: 28092026-C11G, 28092026-C11G-2…
+            # Mismo nombre que en la app y en Drive: 20260928-C11G, 20260928-C11G-2…
             seq = len(a.db.list_photos(self.obs["id"], kind)) + 1
             hint = ph.photo_basename(self.variety, self.week["start_date"], kind, seq)
             a.media.take_photo(done, hint, exact=True)
@@ -2539,12 +2539,6 @@ def _variety_label(variety_id, varieties) -> str:
     return v["name"] if v else "General"
 
 
-def _entry_summary(measure: dict, data: dict) -> str:
-    parts = [f"{col}: {data[col]}" for col in measure["columns"] if str(data.get(col, "")).strip()]
-    parts += [f"{k}: {v}" for k, v in data.items() if k not in measure["columns"] and str(v).strip()]
-    return " · ".join(parts) or "Fila vacía"
-
-
 def open_measures_menu():
     """Lista de mediciones de la semana actual + crear nueva + exportar todas a Excel."""
     a = app()
@@ -2580,48 +2574,39 @@ def export_measures_xlsx(measure_ids: list[int]):
 
 
 def _measure_form(measure: dict | None = None):
-    """Formulario: nombre, tipo (imágenes / planilla) y columnas."""
+    """Formulario: nombre y tipo (planilla / imágenes). Las columnas se crean en la grilla."""
     from kivy.factory import Factory
     box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
                       padding=(0, dp(8), 0, 0))
     box.name = Factory.Field(hint_text="Nombre de la medición")
     box.add_widget(box.name)
     box.kind = measure["kind"] if measure else "table"
-    box.cols = Factory.Field(hint_text="Columnas, separadas por coma")
-    box.cols_hint = MDLabel(text="Ej.: Planta, Largo (cm), N° de frutos", font_style="Caption",
-                            adaptive_height=True, theme_text_color="Custom", text_color=c(theme.MUTED))
     if measure:
         box.name.text = measure["name"]
-        box.cols.text = ", ".join(measure["columns"])
-    else:
-        row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
-        buttons = {}
+        return box
+    row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+    hint = MDLabel(font_style="Caption", adaptive_height=True, theme_text_color="Custom",
+                   text_color=c(theme.MUTED))
+    buttons = {}
 
-        def choose(kind):
-            box.kind = kind
-            for k, b in buttons.items():
-                on = k == kind
-                b.md_bg_color = c(theme.LEAF_DARK) if on else c("#FFFFFF", 0)
-                b.text_color = c("#FFFFFF") if on else c(theme.LEAF_DARK)
-            for w in (box.cols, box.cols_hint):
-                w.opacity, w.disabled = (1, False) if kind == "table" else (0, True)
+    def choose(kind):
+        box.kind = kind
+        for k, b in buttons.items():
+            on = k == kind
+            b.md_bg_color = c(theme.LEAF_DARK) if on else c("#FFFFFF", 0)
+            b.text_color = c("#FFFFFF") if on else c(theme.LEAF_DARK)
+        hint.text = ("Una planilla como Excel: agregue filas y columnas y nombre cada columna."
+                     if kind == "table" else "Fotos con descripción y, si quiere, la variedad.")
 
-        for kind, label in (("table", "Planilla de datos"), ("images", "Imágenes")):
-            b = MDRectangleFlatButton(text=label, theme_text_color="Custom", line_color=c(theme.LEAF_DARK),
-                                      on_release=lambda *_, k=kind: choose(k))
-            buttons[kind] = b
-            row.add_widget(b)
-        box.add_widget(row)
-        Clock.schedule_once(lambda *_: choose("table"))
-    if not measure or measure["kind"] == "table":
-        box.add_widget(box.cols)
-        box.add_widget(box.cols_hint)
+    for kind, label in (("table", "Planilla de datos"), ("images", "Imágenes")):
+        b = MDRectangleFlatButton(text=label, theme_text_color="Custom", line_color=c(theme.LEAF_DARK),
+                                  on_release=lambda *_, k=kind: choose(k))
+        buttons[kind] = b
+        row.add_widget(b)
+    box.add_widget(row)
+    box.add_widget(hint)
+    Clock.schedule_once(lambda *_: choose("table"))
     return box
-
-
-def _split_columns(text: str) -> list[str]:
-    sep = ";" if ";" in text else ","
-    return [t.strip() for t in text.split(sep) if t.strip()]
 
 
 def new_measure_dialog():
@@ -2629,14 +2614,26 @@ def new_measure_dialog():
 
     def ok(form):
         try:
-            mid = a.db.add_measure(form.name.text, form.kind,
-                                   _split_columns(form.cols.text) if form.kind == "table" else [])
+            mid = a.db.add_measure(form.name.text, form.kind)
         except ValueError as exc:
             a.toast(str(exc))
             return False
         a.open_measure(mid, a.week["id"])
 
     form_dialog("Nueva medición", _measure_form(), ok, "CREAR")
+
+
+def _cell_button(text, width, bold=False, bg=None, fg=None, on_release=None):
+    """Celda-botón de la grilla (encabezados, n.º de fila, variedad)."""
+    from kivy.uix.button import Button
+    b = Button(text=text, size_hint=(None, None), size=(width, dp(42)), font_size="13sp",
+               bold=bold, background_normal="", background_down="",
+               background_color=bg or c(theme.LEAF_SOFT), color=fg or c(theme.INK),
+               halign="center", valign="middle", shorten=True, shorten_from="right")
+    b.bind(size=lambda w, sz: setattr(w, "text_size", (sz[0] - dp(8), sz[1])))
+    if on_release:
+        b.bind(on_release=on_release)
+    return b
 
 
 class MeasureScreen(MDScreen):
@@ -2650,14 +2647,17 @@ class MeasureScreen(MDScreen):
         kind = "PLANILLA DE DATOS" if self.measure["kind"] == "table" else "REGISTRO DE IMÁGENES"
         self.ids.kicker.text = f"{kind} · {ph.week_title(self.week).upper()}"
         self.ids.columns_text.text = (
-            "Columnas: " + ", ".join(self.measure["columns"]) if self.measure["kind"] == "table"
+            "Toque una celda para escribir · toque un encabezado para renombrar o eliminar la "
+            "columna · toque el n.º de fila para eliminarla." if self.measure["kind"] == "table"
             else "Cada foto con su descripción y, si quiere, la variedad.")
         actions = self.ids.actions
         fast_clear(actions)
         from kivy.factory import Factory
         if self.measure["kind"] == "table":
             actions.add_widget(Factory.GhostButton(icon="table-row-plus-after", text="Agregar fila",
-                                                   on_release=lambda *_: self.entry_dialog(None)))
+                                                   on_release=lambda *_: self.add_row()))
+            actions.add_widget(Factory.GhostButton(icon="table-column-plus-after", text="Agregar columna",
+                                                   on_release=lambda *_: self.add_column()))
         else:
             actions.add_widget(Factory.GhostButton(icon="camera-outline", text="Tomar foto",
                                                    on_release=lambda *_: self.add_images("camera")))
@@ -2670,93 +2670,232 @@ class MeasureScreen(MDScreen):
         box = self.ids.entries
         fast_clear(box)
         entries = a.db.list_entries(self.measure["id"], week_id=self.week["id"])
-        varieties = a.db.list_varieties(include_archived=True)
-        for e in entries:
-            vname = _variety_label(e["variety_id"], varieties)
-            if self.measure["kind"] == "table":
-                row = EntryRow(title=_entry_summary(self.measure, e["data"]), subtitle=vname,
-                               item=e, screen=self)
-            else:
-                row = EntryRow(title=e["caption"] or "Sin descripción", subtitle=vname, item=e,
-                               screen=self, has_thumb=True)
-                row.ids.thumb_box.add_widget(thumb_widget(e["path"], 160))
-            box.add_widget(row)
         unit = "fila(s)" if self.measure["kind"] == "table" else "foto(s)"
         self.ids.count_text.text = f"{len(entries)} {unit} esta semana"
+        if self.measure["kind"] == "table":
+            self._build_grid(entries)
+            return
+        varieties = a.db.list_varieties(include_archived=True)
+        for e in entries:
+            row = EntryRow(title=e["caption"] or "Sin descripción",
+                           subtitle=_variety_label(e["variety_id"], varieties), item=e,
+                           screen=self, has_thumb=True)
+            row.ids.thumb_box.add_widget(thumb_widget(e["path"], 160))
+            box.add_widget(row)
         if not entries:
             box.add_widget(MDLabel(text="Sin registros esta semana.", font_style="Caption",
                                    adaptive_height=True, theme_text_color="Custom",
                                    text_color=c(theme.MUTED)))
 
-    # ----------------------------------------------------------- registros
-    def entry_dialog(self, entry: dict | None, variety_id=None):
-        """Fila de planilla (o descripción de una foto) + variedad opcional."""
+    # ------------------------------------------------------ planilla (grilla)
+    COL_W, NUM_W, VAR_W = dp(118), dp(40), dp(118)
+
+    def _build_grid(self, entries):
+        """Grilla editable: n.º | Variedad | columnas… · celdas = TextInput que se guardan
+        al salir de ellas. Desplazamiento horizontal si hay muchas columnas."""
+        from kivy.uix.gridlayout import GridLayout
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.textinput import TextInput
+        a = app()
+        cols = list(self.measure["columns"])
+        varieties = a.db.list_varieties(include_archived=True)
+        self._rows = {e["id"]: dict(e["data"]) for e in entries}
+        self._cells = []
+        grid = GridLayout(cols=len(cols) + 2, size_hint=(None, None), spacing=dp(2), padding=dp(2))
+        grid.bind(minimum_width=grid.setter("width"), minimum_height=grid.setter("height"))
+        head_bg, head_fg = c(theme.LEAF_DARK), c("#FFFFFF")
+        grid.add_widget(_cell_button("#", self.NUM_W, True, head_bg, head_fg))
+        grid.add_widget(_cell_button("Variedad", self.VAR_W, True, head_bg, head_fg))
+        for col in cols:
+            grid.add_widget(_cell_button(col, self.COL_W, True, head_bg, head_fg,
+                                         on_release=lambda *_, col=col: self.column_menu(col)))
+        for i, e in enumerate(entries):
+            grid.add_widget(_cell_button(str(i + 1), self.NUM_W, bg=c(theme.LEAF_SOFT),
+                                         on_release=lambda *_, e=e, n=i + 1: self.row_menu(e, n)))
+            grid.add_widget(_cell_button(_variety_label(e["variety_id"], varieties) if e["variety_id"]
+                                         else "—", self.VAR_W, bg=c("#FFFFFF"), fg=c(theme.LEAF_DARK),
+                                         on_release=lambda *_, e=e: self.pick_row_variety(e)))
+            row_cells = []
+            for col in cols:
+                ti = TextInput(text=str(e["data"].get(col, "")), multiline=False, write_tab=False,
+                               size_hint=(None, None), size=(self.COL_W, dp(42)), font_size="14sp",
+                               padding=(dp(8), dp(11)), background_normal="", background_active="",
+                               background_color=c("#FFFFFF"), foreground_color=c(theme.INK),
+                               cursor_color=c(theme.LEAF_DARK))
+                ti.entry_id, ti.col = e["id"], col
+                ti.bind(focus=self._cell_focus)
+                ti.bind(on_text_validate=self._cell_next)
+                grid.add_widget(ti)
+                row_cells.append(ti)
+            self._cells.append(row_cells)
+        sv = ScrollView(do_scroll_x=True, do_scroll_y=False, size_hint=(1, None),
+                        bar_width=dp(4), scroll_type=["bars", "content"])
+        grid.bind(height=lambda g, h: setattr(sv, "height", h + dp(8)))
+        sv.add_widget(grid)
+        self.ids.entries.add_widget(sv)
+        if not entries:
+            self.ids.entries.add_widget(MDLabel(
+                text="Sin filas esta semana: toque «Agregar fila».", font_style="Caption",
+                adaptive_height=True, theme_text_color="Custom", text_color=c(theme.MUTED)))
+
+    def _cell_focus(self, ti, focused):
+        if focused:
+            return
+        data = self._rows.get(ti.entry_id)
+        if data is None:
+            return
+        value = ti.text.strip()
+        if str(data.get(ti.col, "")) == value:
+            return
+        if value:
+            data[ti.col] = value
+        else:
+            data.pop(ti.col, None)
+        app().db.update_entry(ti.entry_id, data=data)
+
+    def _cell_next(self, ti):
+        """Enter: baja a la celda de la fila siguiente (misma columna)."""
+        for r, row in enumerate(self._cells):
+            if ti in row and r + 1 < len(self._cells):
+                nxt = self._cells[r + 1][row.index(ti)]
+                Clock.schedule_once(lambda *_: setattr(nxt, "focus", True), .05)
+                return
+
+    def commit_cells(self):
+        """Guarda la celda en edición (al salir de la pantalla o antes de redibujar)."""
+        for row in getattr(self, "_cells", []):
+            for ti in row:
+                if ti.focus:
+                    ti.focus = False
+                    self._cell_focus(ti, False)
+
+    def on_pre_leave(self, *_):
+        self.commit_cells()
+
+    def add_row(self):
+        self.commit_cells()
+        a = app()
+        a.db.add_entry(self.measure["id"], self.week["id"], None, data={})
+        self.refresh()
+        if self._cells:   # foco en la primera celda de la fila nueva
+            Clock.schedule_once(lambda *_: setattr(self._cells[-1][0], "focus", True), .15)
+
+    def add_column(self):
+        self.commit_cells()
         a = app()
         from kivy.factory import Factory
-        is_table = self.measure["kind"] == "table"
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(0, dp(8), 0, 0))
+        form.add_widget(Factory.Field(hint_text="Nombre de la columna (ej.: Largo (cm))"))
+
+        def ok(f):
+            try:
+                a.db.add_measure_column(self.measure["id"], f.children[0].text)
+            except ValueError as exc:
+                a.toast(str(exc))
+                return False
+            self.measure = a.db.get_measure(self.measure["id"])
+            self.refresh()
+
+        form_dialog("Nueva columna", form, ok, "AGREGAR")
+
+    def column_menu(self, col: str):
+        self.commit_cells()
+        a = app()
+        mid = self.measure["id"]
+
+        def rename():
+            from kivy.factory import Factory
+            form = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(0, dp(8), 0, 0))
+            form.add_widget(Factory.Field(hint_text="Nombre de la columna", text=col))
+
+            def ok(f):
+                try:
+                    a.db.rename_measure_column(mid, col, f.children[0].text)
+                except ValueError as exc:
+                    a.toast(str(exc))
+                    return False
+                self.measure = a.db.get_measure(mid)
+                self.refresh()
+
+            form_dialog("Renombrar columna", form, ok)
+
+        def remove():
+            def go():
+                try:
+                    a.db.delete_measure_column(mid, col)
+                except ValueError as exc:
+                    a.toast(str(exc))
+                    return
+                self.measure = a.db.get_measure(mid)
+                self.refresh()
+
+            confirm("Eliminar columna", f"Se eliminará la columna «{col}» y sus datos en todas "
+                    "las semanas.", [("Eliminar", go)])
+
+        def move(step):
+            cols = list(self.measure["columns"])
+            i = cols.index(col)
+            j = max(0, min(len(cols) - 1, i + step))
+            cols[i], cols[j] = cols[j], cols[i]
+            a.db.update_measure(mid, columns=cols)
+            self.measure = a.db.get_measure(mid)
+            self.refresh()
+
+        pick_dialog(f"Columna «{col}»", [
+            ("Renombrar", "Cambia el nombre (los datos se conservan)", rename),
+            ("Mover a la izquierda", "Cambia el orden de las columnas", lambda: move(-1)),
+            ("Mover a la derecha", "Cambia el orden de las columnas", lambda: move(1)),
+            ("Eliminar columna", "Borra la columna y sus datos", remove),
+        ])
+
+    def row_menu(self, entry: dict, n: int):
+        self.commit_cells()
+        pick_dialog(f"Fila {n}", [
+            ("Elegir variedad", "Asocia la fila a una variedad (sale en su informe)",
+             lambda: self.pick_row_variety(entry)),
+            ("Eliminar fila", "Borra los datos de esta fila", lambda: self.delete_entry(entry)),
+        ])
+
+    def pick_row_variety(self, entry: dict):
+        self.commit_cells()
+        a = app()
+
+        def choose(vid):
+            a.db.update_entry(entry["id"], variety_id=vid)
+            self.refresh()
+
+        pick_dialog("Variedad de la fila", [("— General", "Sin variedad específica", lambda: choose(None))]
+                    + [(v["name"], v["code"] or "", lambda v=v: choose(v["id"]))
+                       for v in a.db.list_varieties()])
+
+    # ----------------------------------------------------------- registros
+    def entry_dialog(self, entry: dict):
+        """Descripción y variedad (opcional) de una foto de la medición."""
+        a = app()
+        from kivy.factory import Factory
         form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6),
                            padding=(0, dp(22), 0, 0))
-        state = {"variety_id": entry["variety_id"] if entry else variety_id}
+        state = {"variety_id": entry["variety_id"]}
         varieties = a.db.list_varieties()
+        caption = Factory.Field(hint_text="Descripción", text=entry.get("caption") or "")
         vbtn = Factory.GhostButton(icon="fruit-cherries")
 
         def set_variety(vid):
             state["variety_id"] = vid
             vbtn.text = f"Variedad: {_variety_label(vid, varieties)}"
 
-        def pick_variety(*_):
-            pick_dialog("Variedad", [("General", "Sin variedad específica", lambda: set_variety(None))]
-                        + [(v["name"], v["code"] or "", lambda v=v: set_variety(v["id"])) for v in varieties])
-
-        vbtn.bind(on_release=pick_variety)
+        vbtn.bind(on_release=lambda *_: pick_dialog(
+            "Variedad", [("General", "Sin variedad específica", lambda: set_variety(None))]
+            + [(v["name"], v["code"] or "", lambda v=v: set_variety(v["id"])) for v in varieties]))
         set_variety(state["variety_id"])
-        fields = {}
-        if is_table:
-            data = entry["data"] if entry else {}
-            cols = list(self.measure["columns"]) + [k for k in data if k not in self.measure["columns"]]
-            for col in cols:
-                f = Factory.Field(hint_text=col, text=str(data.get(col, "")))
-                fields[col] = f
-                form.add_widget(f)
-        else:
-            fields["caption"] = Factory.Field(hint_text="Descripción", text=(entry or {}).get("caption") or "")
-            form.add_widget(fields["caption"])
+        form.add_widget(caption)
         form.add_widget(vbtn)
-        scroll = None
-        if len(fields) > 5:   # planillas anchas: el formulario se desplaza
-            from kivymd.uix.scrollview import MDScrollView
-            scroll = MDScrollView(size_hint_y=None, height=dp(380), do_scroll_x=False)
-            scroll.add_widget(form)
-        dialog = None
 
-        def save(again=False):
-            if is_table:
-                values = {col: f.text.strip() for col, f in fields.items()}
-                if not any(values.values()):
-                    a.toast("Complete al menos un dato.")
-                    return
-                if entry:
-                    a.db.update_entry(entry["id"], data=values, variety_id=state["variety_id"])
-                else:
-                    a.db.add_entry(self.measure["id"], self.week["id"], state["variety_id"], data=values)
-            else:
-                a.db.update_entry(entry["id"], caption=fields["caption"].text,
-                                  variety_id=state["variety_id"])
-            dialog.dismiss()
+        def ok(_f):
+            a.db.update_entry(entry["id"], caption=caption.text, variety_id=state["variety_id"])
             self.refresh()
-            if again:   # siguiente fila con la misma variedad
-                Clock.schedule_once(lambda *_: self.entry_dialog(None, state["variety_id"]), .2)
 
-        buttons = [MDFlatButton(text="CANCELAR", on_release=lambda *_: dialog.dismiss())]
-        if is_table and not entry:
-            buttons.append(MDFlatButton(text="GUARDAR Y OTRA", theme_text_color="Custom",
-                                        text_color=c(theme.LEAF_DARK), on_release=lambda *_: save(True)))
-        buttons.append(MDFlatButton(text="GUARDAR", theme_text_color="Custom",
-                                    text_color=c(theme.LEAF_DARK), on_release=lambda *_: save()))
-        title = ("Nueva fila" if not entry else "Editar fila") if is_table else "Foto"
-        dialog = MDDialog(title=title, type="custom", content_cls=scroll or form,
-                          md_bg_color=DIALOG_BG, buttons=buttons)
-        dialog.open()
+        form_dialog("Foto", form, ok)
 
     def edit_entry(self, entry: dict):
         self.entry_dialog(entry)
@@ -2774,7 +2913,7 @@ class MeasureScreen(MDScreen):
         measure, week = self.measure, self.week
         start = _dt.date.fromisoformat(week["start_date"][:10])
         from platform_utils import slugify
-        base = f"{start:%d%m%Y}-{slugify(measure['name'])[:40] or 'medicion'}"
+        base = f"{ph.photo_date(start)}-{slugify(measure['name'])[:40] or 'medicion'}"
 
         def done(result, origin):
             paths = [p for p in (result if isinstance(result, list) else [result]) if p]
@@ -2818,6 +2957,7 @@ class MeasureScreen(MDScreen):
 
     # --------------------------------------------------------- definición
     def edit(self):
+        self.commit_cells()
         a = app()
         m = self.measure
         form = _measure_form(m)
@@ -2828,8 +2968,7 @@ class MeasureScreen(MDScreen):
 
         def ok(f):
             try:
-                a.db.update_measure(m["id"], name=f.name.text,
-                                    columns=_split_columns(f.cols.text) if m["kind"] == "table" else None)
+                a.db.update_measure(m["id"], name=f.name.text)
             except ValueError as exc:
                 a.toast(str(exc))
                 return False
@@ -2851,4 +2990,5 @@ class MeasureScreen(MDScreen):
                 "Las fotos quedan en el teléfono.", [("Eliminar", go)])
 
     def export(self):
+        self.commit_cells()
         export_measures_xlsx([self.measure["id"]])

@@ -165,10 +165,36 @@ class FenoRubusApp(MDApp):
                          lambda: self.settings,
                          lambda: self.settings.ids.varieties.refresh()]
         Clock.schedule_once(self._prewarm_next, 2.5)
+        # Nombres de foto «ddmmaaaa-…» (hasta la 1.1.30) -> «aaaammdd-…»: archivos de la app,
+        # galería del teléfono y (al respaldar) Google Drive.
+        Clock.schedule_once(lambda *_: self.workers.submit(self._rename_photos), 4)
         # Sube lo que haya quedado en cola (sin red la última vez).
         # y respalda la base en Drive una vez al día (las fotos ya se suben solas).
         if self.db.get_setting("drive_enabled", False):
             Clock.schedule_once(lambda *_: self.workers.submit(self._drive_daily), 6)
+
+    def _rename_photos(self):
+        try:
+            from photo_rename import migrate_local
+            res = migrate_local(self.db)
+        except Exception as exc:  # noqa: BLE001 (nunca debe impedir usar la app)
+            print("rename photos:", exc)
+            return
+        Clock.schedule_once(lambda *_: self._rename_public(res["renamed"]), 0)
+
+    def _rename_public(self, local: int):
+        """Galería («Imágenes de Fenología»): en el hilo principal (Java), una sola vez."""
+        public = 0
+        if not self.db.get_setting("public_names_aaaammdd", False):
+            try:
+                public, _failed = self.media.rename_public_legacy()
+                self.db.set_setting("public_names_aaaammdd", True)
+            except Exception as exc:  # noqa: BLE001
+                print("rename public:", exc)
+        if local or public:
+            self.toast(f"Fotos renombradas al formato año-mes-día: {max(local, public)}")
+        if self.db.get_setting("drive_enabled", False):
+            self.drive.flush_async()   # renombra también las ya subidas a Drive
 
     def _prewarm_next(self, *_):
         """Crea la siguiente pantalla pendiente solo si el usuario está en reposo en el
