@@ -1051,3 +1051,48 @@ def test_workspaces_migration_isolation_and_backup(tmp_path):
     assert nv.reference_counts() == {19: 1}
     assert {w["code"] for w in wss.list()} >= {"NV", "AM", "LE", "FE"}
     wss.close()
+
+
+def test_bbch_scale_canes_laterals_and_substages(db, tmp_path):
+    """Escala de la tabla (cañas anuales / brotes laterales) con subestadios 89-1 … 89-9:
+    se muestran «89-1», se ordenan entre 89 y 91 y funcionan en IA e informes."""
+    assert ph.code_str(891) == "89-1" and ph.code_str(7) == "07" and ph.code_str(553) == "55-3"
+    assert ph.parse_bbch_code("BBCH 89-3: 30 % cosechado") == 893 and ph.parse_bbch_code("891") == 891
+    assert ph.macro_of(891) == 8 and ph.bbch_value(891) == 89.1
+    codes = [r["code"] for r in db.list_bbch()]
+    assert codes.index(89) < codes.index(891) < codes.index(899) < codes.index(91)
+    names = db.bbch_names()
+    assert names[9].startswith("Cañas: ") and "Laterales: " in names[9]
+    assert names[31].startswith("Cañas anuales: 10 %") and names[7].startswith("Brotes laterales")
+    assert ph.bbch_label(891, names) == "BBCH 89-1: 10 % de los frutos cosechados"
+    assert 15 in codes                                     # estados anteriores se conservan
+
+    # Una base con la escala anterior se actualiza sin pisar lo editado por el usuario.
+    db.execute("DELETE FROM meta WHERE key='bbch_scale'")
+    db.upsert_bbch(65, "Plena floración", "antigua", "", source="base")
+    db.upsert_bbch(61, "Mi nombre", "editado", "", source="user")
+    db.execute("DELETE FROM bbch_stages WHERE code=893")
+    assert db.refresh_bbch_scale() > 0
+    names = db.bbch_names()
+    assert names[65].startswith("Final de la floración") and names[61] == "Mi nombre" and 893 in names
+
+    # IA: referencias en 89-1 -> sugiere 89-1 (código real) y explica con «89-1».
+    clf = PhenologyClassifier(db, HandcraftedExtractor())
+    for i in range(4):
+        clf.add_reference(synthetic_photo(87, "detail", str(tmp_path / f"h{i}.jpg"), i), 891)
+    s = clf.suggest(str(tmp_path / "h0.jpg"))
+    assert s.code in {r["code"] for r in db.list_bbch()}
+    assert all(isinstance(c, int) for c, _p in s.top)
+    assert clf.evaluate()["n"] == 4
+
+    # Informes: 89-1 en la tabla y en el heatmap; hito «Inicio cosecha» lo reconoce.
+    w = db.current_week(dt.date(2026, 10, 30))
+    v = db.list_varieties()[0]
+    obs = db.get_or_create_observation(v["id"], w["id"])
+    db.update_observation(obs["id"], bbch_code=891, bbch_label=ph.bbch_label(891, names))
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    html = open(rep.weekly(w["id"]).path, encoding="utf-8").read()
+    assert "BBCH 89-1" in html
+    matrix = open(rep.matrix(w["season"]).path, encoding="utf-8").read()
+    assert ">89-1<" in matrix and "≥89-1" in matrix
+    assert rep.matrix(w["season"], package="pdf").path.endswith(".pdf")

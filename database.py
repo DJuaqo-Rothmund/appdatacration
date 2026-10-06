@@ -274,6 +274,8 @@ class Database:
         self.init_schema()
         if seed:
             self.seed_defaults()
+        if shared is None and seed:
+            self.refresh_bbch_scale()
 
     # ------------------------------------------------------------------ core
     def close(self) -> None:
@@ -353,6 +355,24 @@ class Database:
             """)
         finally:
             c.execute("PRAGMA foreign_keys = ON")
+
+    def refresh_bbch_scale(self) -> int:
+        """Pone al día la escala BASE (versión ph.BBCH_SCALE_VERSION) sin tocar los estados
+        editados por el usuario o enriquecidos con documentos. Devuelve cuántos cambió."""
+        ai = self.ai_db
+        row = ai.query_one("SELECT value FROM meta WHERE key='bbch_scale'")
+        if row and int(row["value"] or 0) >= ph.BBCH_SCALE_VERSION:
+            return 0
+        have = {r["code"]: r for r in ai.query("SELECT code, source FROM bbch_stages")}
+        n = 0
+        for code, label, desc, kw in ph.BBCH_RUBUS:
+            cur = have.get(code)
+            if cur is None or cur["source"] == "base":
+                ai.upsert_bbch(code, label, desc, kw, source="base")
+                n += 1
+        ai.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('bbch_scale', ?)",
+                   (str(ph.BBCH_SCALE_VERSION),))
+        return n
 
     def seed_defaults(self) -> None:
         """Carga variedades y escala BBCH iniciales (solo la primera vez)."""
@@ -931,7 +951,8 @@ class Database:
 
     # ------------------------------------------------------------------ BBCH
     def list_bbch(self) -> list[dict]:
-        return self.ai_db.query("SELECT * FROM bbch_stages ORDER BY code")
+        """Escala ordenada por su posición (los subestadios 89-1… van entre 89 y 91)."""
+        return ph.bbch_sorted(self.ai_db.query("SELECT * FROM bbch_stages"))
 
     def bbch_names(self) -> dict[int, str]:
         return {r["code"]: r["label"] for r in self.list_bbch()}

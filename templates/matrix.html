@@ -45,7 +45,7 @@
 <p class="lead">Primera semana en que cada variedad alcanzó (o superó) el estado indicado.</p>
 <div class="scroll-x">
 <table>
-  <thead><tr><th>Variedad</th>{% for code, name in milestones %}<th>{{ name }}<br><span class="mono">≥{{ code }}</span></th>{% endfor %}</tr></thead>
+  <thead><tr><th>Variedad</th>{% for code, name in milestones %}<th>{{ name }}<br><span class="mono">≥{{ code|code }}</span></th>{% endfor %}</tr></thead>
   <tbody>
   {% for r in rows %}
   <tr><td><strong>{{ r.variety.name }}</strong></td>
@@ -68,7 +68,7 @@
       {% for g in r.gallery %}
         <div title="{{ r.variety.name }} · {{ g.week|wk }}{% if g.code is not none %} · BBCH {{ g.code }}{% endif %}">
           {% if g.src %}<img src="{{ g.src }}" alt="" loading="lazy">{% else %}<div class="nophoto">—</div>{% endif %}
-          <div class="cap">{{ g.week|wks }}{% if g.code is not none %} · {{ '%02d'|format(g.code) }}{% endif %}</div>
+          <div class="cap">{{ g.week|wks }}{% if g.code is not none %} · {{ g.code|code }}{% endif %}</div>
         </div>
       {% endfor %}
       </div>

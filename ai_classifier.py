@@ -438,7 +438,7 @@ class PhenologyClassifier:
         # Suavizado ordinal: los votos "derraman" hacia códigos vecinos.
         p = np.full(len(codes), 1e-3)
         for code, wv in votes.items():
-            p += wv * np.exp(-0.5 * ((codes - code) / 2.5) ** 2)
+            p += wv * np.exp(-0.5 * ((codes - ph.bbch_value(code)) / 2.5) ** 2)
         p /= p.sum()
         total = float(w.sum())
         info = {"k": int(k), "votes": {str(c): round(float(v) / total, 3) for c, v in votes.items()},
@@ -456,10 +456,11 @@ class PhenologyClassifier:
             if gap:
                 rate = (ph.expected_bbch_for_week(week_number)
                         - ph.expected_bbch_for_week(prev_week)) / gap
-            expected = prev_code + max(0.0, rate) * gap
+            prev_val = ph.bbch_value(prev_code)
+            expected = prev_val + max(0.0, rate) * gap
             sigma = 5.0 + 3.0 * gap
             p = np.exp(-0.5 * ((codes - expected) / sigma) ** 2)
-            p = np.where(codes < prev_code - 2, p * 0.1, p)  # sin retroceso fenológico
+            p = np.where(codes < prev_val - 2, p * 0.1, p)  # sin retroceso fenológico
             info = {"mode": "historial", "expected": round(float(expected), 1),
                     "previous": int(prev_code)}
         elif week_number:
@@ -473,7 +474,7 @@ class PhenologyClassifier:
 
     @staticmethod
     def _color(codes: np.ndarray, prof: dict[str, float]):
-        macro = codes // 10
+        macro = np.floor(codes / 10)   # codes = posiciones en la escala (89-1 -> 89,1)
         s = np.ones(len(codes))
         white, pink, red = prof["white"], prof["pink"], prof["red"]
         dark, green, brown = prof["dark_red"], prof["green"], prof["brown"]
@@ -501,13 +502,13 @@ class PhenologyClassifier:
         s = s / s.sum()
         return s, {k: round(v, 3) for k, v in prof.items()}
 
-    def _text(self, codes: np.ndarray, notes: str, catalog: list[dict]):
+    def _text(self, ids: np.ndarray, notes: str, catalog: list[dict]):
         toks = set(tokenize(notes))
         if not toks:
             return None, {}
         by_code = {r["code"]: set(tokenize(f"{r['label']} {r.get('description', '')} "
                                            f"{r.get('keywords', '')}")) for r in catalog}
-        scores = np.array([len(toks & by_code.get(int(c), set())) for c in codes], dtype=float)
+        scores = np.array([len(toks & by_code.get(int(c), set())) for c in ids], dtype=float)
         if scores.max() <= 0:
             return None, {}
         p = 1.0 + 2.0 * scores / scores.max()
@@ -542,7 +543,9 @@ class PhenologyClassifier:
         t0 = time.time()
         paths = [image_path] if isinstance(image_path, str) else list(image_path)
         catalog = self.catalog()
-        codes = np.array([r["code"] for r in catalog], dtype=np.float64)
+        # ids = códigos reales (891); codes = su posición en la escala (89,1) para los cálculos.
+        ids = np.array([r["code"] for r in catalog], dtype=np.int64)
+        codes = np.array([ph.bbch_value(c) for c in ids], dtype=np.float64)
 
         evid = [self._image_evidence(pth, codes) for pth in paths]
         logp = np.mean([e[0] for e in evid], axis=0)
@@ -554,7 +557,7 @@ class PhenologyClassifier:
         p_t, t_info = self._temporal(codes, week_number, previous)
         logp = logp + 0.8 * np.log(p_t)
         comps["temporal"] = t_info
-        p_x, x_info = self._text(codes, notes, catalog)
+        p_x, x_info = self._text(ids, notes, catalog)
         if p_x is not None:
             logp += 0.6 * np.log(p_x)
             comps["notas"] = x_info
@@ -562,10 +565,10 @@ class PhenologyClassifier:
         p = np.exp(logp - logp.max())
         p /= p.sum()
         order = np.argsort(-p)[:3]
-        top = [(int(codes[i]), round(float(p[i]), 3)) for i in order]
+        top = [(int(ids[i]), round(float(p[i]), 3)) for i in order]
         best = top[0][0]
         # Confianza a nivel de estadio principal (más estable que el código exacto).
-        macro_conf = float(p[(codes // 10) == best // 10].sum())
+        macro_conf = float(p[np.floor(codes / 10) == ph.macro_of(best)].sum())
         comps["ms"] = round((time.time() - t0) * 1000, 1)
         return Suggestion(code=best, label=self.label(best),
                           confidence=round(0.5 * top[0][1] + 0.5 * macro_conf, 3),
@@ -573,11 +576,12 @@ class PhenologyClassifier:
 
     def probabilities(self, image_path: str) -> dict[int, float]:
         """Distribución visual (sin priors) para una foto: usada en el desafío diario."""
-        codes = np.array([r["code"] for r in self.catalog()], dtype=np.float64)
+        ids = [r["code"] for r in self.catalog()]
+        codes = np.array([ph.bbch_value(c) for c in ids], dtype=np.float64)
         logp, _c, _p = self._image_evidence(image_path, codes)
         p = np.exp(logp - logp.max())
         p /= p.sum()
-        return {int(c): float(v) for c, v in zip(codes, p)}
+        return {int(c): float(v) for c, v in zip(ids, p)}
 
     @staticmethod
     def _explain(comps: dict, prof: dict) -> str:
@@ -585,12 +589,13 @@ class PhenologyClassifier:
         k = comps.get("knn")
         if k:
             best = max(k["votes"].items(), key=lambda kv: kv[1])
-            parts.append(f"k-NN ({k['n_refs']} ref.): BBCH {best[0]} ({best[1]:.0%} del voto)")
+            parts.append(f"k-NN ({k['n_refs']} ref.): BBCH {ph.code_str(int(best[0]))} "
+                         f"({best[1]:.0%} del voto)")
         else:
             parts.append("Sin referencias etiquetadas: priors agronómicos")
         t = comps.get("temporal", {})
         if t.get("mode") == "historial":
-            parts.append(f"historial: último BBCH {t['previous']}, esperado ≈{t['expected']:.0f}")
+            parts.append(f"historial: último BBCH {ph.code_str(t['previous'])}, esperado ≈{t['expected']:.0f}")
         elif t.get("mode") == "calendario":
             parts.append(f"calendario: esperado ≈ BBCH {t['expected']:.0f}")
         dom = sorted(prof.items(), key=lambda kv: -kv[1])[:2]
@@ -611,14 +616,14 @@ class PhenologyClassifier:
         n = len(y)
         if n < 3:
             return {"n": n, "exact": None, "macro": None}
-        codes = np.array(sorted({r["code"] for r in self.catalog()} | set(y.tolist())),
-                         dtype=np.float64)
+        ids = sorted({r["code"] for r in self.catalog()} | set(y.tolist()), key=ph.bbch_value)
+        codes = np.array([ph.bbch_value(c) for c in ids], dtype=np.float64)
         exact = macro = 0
         for i in range(n):
             p, _ = self._knn(X[i], codes, exclude=i)
-            pred = int(codes[int(np.argmax(p))])
+            pred = int(ids[int(np.argmax(p))])
             exact += pred == int(y[i])
-            macro += pred // 10 == int(y[i]) // 10
+            macro += ph.macro_of(pred) == ph.macro_of(int(y[i]))
         return {"n": n, "exact": exact / n, "macro": macro / n}
 
     # ------------------------------------------------------------ documentos

@@ -28,7 +28,7 @@ _SEQ_LIGHT, _SEQ_DARK = (0xEE, 0xF0, 0xE2), (0x2B, 0x36, 0x14)
 
 
 def seq_color(code):
-    t = max(0.0, min(1.0, code / 99.0)) ** 0.85
+    t = max(0.0, min(1.0, ph.bbch_value(code) / 99.0)) ** 0.85
     c = tuple(round(a + (b - a) * t) for a, b in zip(_SEQ_LIGHT, _SEQ_DARK))
     lum = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255
     return c, ("#ffffff" if lum < 0.5 else "#1f2413")
@@ -229,7 +229,7 @@ class Report(PDFDoc):
             return x0 + (wk - wmin) / (wmax - wmin) * w
 
         def Y(code):
-            return y0 + (1 - code / 99) * hh
+            return y0 + (1 - ph.bbch_value(code) / 99) * hh
 
         from reporter import BANDS
         for i, (lo, hi, name) in enumerate(BANDS):
@@ -270,7 +270,8 @@ class Report(PDFDoc):
         if not pts:
             return
         wmax = max(wmax, wmin + 1)
-        coords = [(x + (a - wmin) / (wmax - wmin) * w, y + (1 - b / 99) * h) for a, b in sorted(pts)]
+        coords = [(x + (a - wmin) / (wmax - wmin) * w, y + (1 - ph.bbch_value(b) / 99) * h)
+                  for a, b in sorted(pts)]
         self.polyline(coords, color, 1.1)
         self.circle(*coords[-1], 1.6, fill=color)
 
@@ -287,7 +288,7 @@ class Report(PDFDoc):
                         row.append({"text": "·", "color": MUTED})
                     else:
                         fill, fg = seq_color(c["code"])
-                        row.append({"text": f"{c['code']:02d}", "fill": fill, "color": fg, "bold": True})
+                        row.append({"text": f"{ph.code_str(c['code'])}", "fill": fill, "color": fg, "bold": True})
                 rows.append(row)
             self.table(headers, rows, [3.4] + [1] * len(chunk), 7.6, ["left"] + ["center"] * len(chunk))
 
@@ -311,7 +312,7 @@ class Report(PDFDoc):
 
     def ai_geo_notes(self, item: dict, x: float, w: float):
         if item.get("ai_code") is not None:
-            t = f"Sugerencia IA: BBCH {item['ai_code']:02d}"
+            t = f"Sugerencia IA: BBCH {ph.code_str(item['ai_code'])}"
             if item.get("ai_conf") is not None:
                 t += f" ({round(item['ai_conf'] * 100)} % conf.)"
             if item.get("ai_accepted") == 1:
@@ -348,7 +349,7 @@ def weekly(ctx: dict, names: dict, num=None) -> Report:
         n = (1 if c["img"]["canopy"] else 0) + (1 if c["img"]["detail"] else 0) + len(c.get("extras") or [])
         ia = "—"
         if c.get("ai_code") is not None:
-            ia = f"BBCH {c['ai_code']:02d}" + {1: " · aceptada", 0: " · corregida"}.get(c.get("ai_accepted"), "")
+            ia = f"BBCH {ph.code_str(c['ai_code'])}" + {1: " · aceptada", 0: " · corregida"}.get(c.get("ai_accepted"), "")
         rows.append([{"text": c["variety"]["name"], "bold": True},
                      ph.bbch_label(c["code"], names) if c["code"] is not None else "Sin estado",
                      {"text": macro_name(c["code"]) or "—", "color": MUTED}, str(n), {"text": ia, "color": MUTED}])
@@ -453,7 +454,7 @@ def period(ctx: dict, names: dict, num=None) -> Report:
         r.y += 14
         r.text(M, r.y, s["variety"]["name"], 11, True, INK)
         if s["first"] is not None:
-            t = f"BBCH {s['first']:02d} → {s['last']:02d}" + (
+            t = f"BBCH {ph.code_str(s['first'])} → {ph.code_str(s['last'])}" + (
                 f" · avance {s['advance']} unidades BBCH" if s["advance"] is not None else "")
         else:
             t = "Sin registros en el período"
@@ -467,7 +468,7 @@ def period(ctx: dict, names: dict, num=None) -> Report:
                 r.photo(t["img"].get("detail") or t["img"].get("canopy"), x, r.y, w, h)
                 lab = t["week"]["label"].replace("Semana del ", "")
                 r.text(x, r.y + h + 9, r.fit(f"{ph.week_short(t['week'])} · {lab}", w, 6.8), 6.8, False, MUTED)
-                r.text(x, r.y + h + 18, f"BBCH {t['code']:02d}" if t["code"] is not None else "—", 7.4,
+                r.text(x, r.y + h + 18, f"BBCH {ph.code_str(t['code'])}" if t["code"] is not None else "—", 7.4,
                        True, INK if t["code"] is not None else MUTED)
             r.y += h + 24
     return r
@@ -515,7 +516,7 @@ def variety(ctx: dict, names: dict, num=None) -> Report:
             r.chart({"series": [{"id": v["id"], "name": v["name"], "points": pts}], "sel": [v["id"]],
                      "wmin": lo, "wmax": hi, "labels": labels})
     if any(t["code"] is not None for t in timeline):
-        r.table([f"{name} (>= {code})" for code, name in [(mm["code"], mm["name"]) for mm in ctx["milestones"]]],
+        r.table([f"{name} (>= {ph.code_str(code)})" for code, name in [(mm["code"], mm["name"]) for mm in ctx["milestones"]]],
                 [[f"Semana {mm['week']}" if mm["week"] else {"text": "—", "color": MUTED}
                   for mm in ctx["milestones"]]], [1] * len(ctx["milestones"]), 7.6,
                 ["center"] * len(ctx["milestones"]))
@@ -595,7 +596,7 @@ def matrix(ctx: dict, names: dict, num=None) -> Report:
         r.para("Se necesitan al menos dos variedades registradas en una misma semana.", 9, MUTED)
     r.h2("Hitos fenológicos", "Primera semana en que cada variedad alcanzó (o superó) el estado indicado.")
     ms = ctx["milestones"]
-    r.table(["Variedad"] + [f"{name} (>= {code})" for code, name in ms],
+    r.table(["Variedad"] + [f"{name} (>= {ph.code_str(code)})" for code, name in ms],
             [[{"text": rr["variety"]["name"], "bold": True}]
              + [f"S{h}" if h else {"text": "—", "color": MUTED} for h in rr["hits"]] for rr in rows],
             [2.2] + [1] * len(ms), 7.6, ["left"] + ["center"] * len(ms))
@@ -614,7 +615,7 @@ def matrix(ctx: dict, names: dict, num=None) -> Report:
             for j, g in enumerate(gal[i:i + cols]):
                 x = M + j * (w + gap)
                 r.photo(g["src"], x, r.y, w, h)
-                cap = ph.week_short(g["week"]) + (f" · {g['code']:02d}" if g["code"] is not None else "")
+                cap = ph.week_short(g["week"]) + (f" · {ph.code_str(g['code'])}" if g["code"] is not None else "")
                 r.text(x, r.y + h + 8, cap, 6.6, False, MUTED)
             r.y += h + 13
     return r

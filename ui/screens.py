@@ -190,8 +190,8 @@ def bbch_pick_items(db, callback, extra: list | None = None) -> list[tuple]:
     items = list(extra or [])
     for r in db.list_bbch():
         bg, _fg = theme.stage_colors(r["code"])
-        items.append((f"BBCH {r['code']:02d} · {r['label']}",
-                      ph.MACRO_STAGES.get(r["code"] // 10, ""),
+        items.append((f"BBCH {ph.code_str(r['code'])} · {r['label']}",
+                      ph.MACRO_STAGES.get(ph.macro_of(r["code"]), ""),
                       lambda code=r["code"]: callback(code), bg))
     return items
 
@@ -582,7 +582,7 @@ class SamplingTab(MDBoxLayout):
             row.subtitle = (obs["bbch_label"] or ph.bbch_label(code, names)) if code is not None \
                 else ("Foto sin estado asignado" if n else "Pendiente de registro")
             row.photos, row.photo_tag = n, ("SIN FOTOS" if not n else f"{n} FOTO" + ("S" if n > 1 else ""))
-            row.code_tag = f"BBCH {code:02d}" if code is not None else "BBCH —"
+            row.code_tag = f"BBCH {ph.code_str(code)}" if code is not None else "BBCH —"
             row.code_bg, row.code_fg, row.done = bg, fg, code is not None
             thumb = photos.get("detail") or photos.get("canopy")
             src = thumb["path"] if thumb else ""
@@ -1208,7 +1208,7 @@ class ObservationScreen(MDScreen):
         fast_clear(box)
         for code, p in top[1:3]:
             box.add_widget(MDRectangleFlatButton(
-                text=f"BBCH {code:02d} · {p:.0%}", theme_text_color="Custom",
+                text=f"BBCH {ph.code_str(code)} · {p:.0%}", theme_text_color="Custom",
                 text_color=c(theme.LEAF_DARK), line_color=c(theme.LINE),
                 on_release=lambda b, code=code: self._set_bbch(code)))
 
@@ -2322,7 +2322,7 @@ class AILabScreen(MDScreen):
         grid = MDGridLayout(cols=2, spacing=dp(8), adaptive_height=True)
         opts = []
         for code in p["options"]:
-            o = MindOption(title=f"BBCH {code:02d}", subtitle=names.get(code, ""), code=code)
+            o = MindOption(title=f"BBCH {ph.code_str(code)}", subtitle=names.get(code, ""), code=code)
             o.bind(on_release=lambda w, ch=ch: self._answer(ch, w, opts))
             opts.append(o)
             grid.add_widget(o)
@@ -2348,13 +2348,13 @@ class AILabScreen(MDScreen):
             if not o.result:
                 o.opacity = .45
         if res["correct"] is None:
-            msg = f"Etiquetada como BBCH {option.code:02d}. +{res['xp']} XP"
+            msg = f"Etiquetada como BBCH {ph.code_str(option.code)}. +{res['xp']} XP"
         elif res["correct"]:
             msg = f"¡Correcto! +{res['xp']} XP"
         else:
-            msg = f"Era BBCH {truth:02d}. La IA lo aprende igual. +{res['xp']} XP"
+            msg = f"Era BBCH {ph.code_str(truth)}. La IA lo aprende igual. +{res['xp']} XP"
         if res.get("ai") is not None:
-            msg += f" · la IA había pensado BBCH {res['ai']:02d}"
+            msg += f" · la IA había pensado BBCH {ph.code_str(res['ai'])}"
         self._feedback(msg, res)
 
     # ---- «Muéstrame este estado»
@@ -2364,13 +2364,13 @@ class AILabScreen(MDScreen):
         row = next((r for r in a.db.list_bbch() if r["code"] == code), None)
         card = _mind("MindCard")
         card.add_widget(_mind("MindSection", text="MUÉSTRAME ESTE ESTADO"))
-        card.add_widget(MDLabel(text=f"BBCH {code:02d}", font_style="H4", bold=True, adaptive_height=True,
+        card.add_widget(MDLabel(text=f"BBCH {ph.code_str(code)}", font_style="H4", bold=True, adaptive_height=True,
                                 theme_text_color="Custom", text_color=c(theme.MIND_ACCENT)))
         card.add_widget(MDLabel(text=row["label"] if row else "", font_style="H6", adaptive_height=True,
                                 theme_text_color="Custom", text_color=c(theme.MIND_TEXT)))
         if row and row["description"]:
             card.add_widget(_mind("MindMuted", text=row["description"]))
-        card.add_widget(_mind("MindMuted", text=ph.MACRO_STAGES.get(code // 10, "")))
+        card.add_widget(_mind("MindMuted", text=ph.MACRO_STAGES.get(ph.macro_of(code), "")))
         cam = _mind("MindButton", text="Tomar foto")
         cam.bind(on_release=lambda *_: self._capture(ch, "camera"))
         gal = _mind("MindGhost", icon="image-outline", text="Elegir de la galería")
@@ -2392,7 +2392,7 @@ class AILabScreen(MDScreen):
 
             def work():
                 try:
-                    stored = store_photo(path, data_subdir("training"), f"desafio_bbch{ch['payload']['target']:02d}")
+                    stored = store_photo(path, data_subdir("training"), f"desafio_bbch{ph.code_str(ch['payload']['target'])}")
                     res = self.game.complete_capture(ch["id"], stored)
                     res["path"] = stored
                     Clock.schedule_once(lambda *_: self._capture_done(res))
@@ -2404,7 +2404,7 @@ class AILabScreen(MDScreen):
             a.workers.submit(work)
 
         if source == "camera":
-            a.media.take_photo(done, f"entrenamiento_BBCH{ch['payload']['target']:02d}")
+            a.media.take_photo(done, f"entrenamiento_BBCH{ph.code_str(ch['payload']['target'])}")
         else:
             a.media.pick_image(done)
 
@@ -2414,7 +2414,7 @@ class AILabScreen(MDScreen):
         img = MDBoxLayout(size_hint_y=None, height=dp(200))
         img.add_widget(thumb_widget(res["path"], 640))
         card.add_widget(img)
-        seen = f"La IA vio BBCH {res['ai']:02d}"
+        seen = f"La IA vio BBCH {ph.code_str(res['ai'])}"
         verdict = " — ¡coincide con el estadio!" if res["agree"] else " — ahora aprende tu ejemplo"
         self.ids.task_box.add_widget(card)
         self._feedback(f"{seen}{verdict}. +{res['xp']} XP", res, container=card)
@@ -2453,7 +2453,7 @@ class AILabScreen(MDScreen):
             code = p["bbch_code"]
             row = LabelPhotoRow(
                 title=f"{p['variety_name']} · {ph.week_short(p)}",
-                subtitle=(f"BBCH {code:02d}" if code is not None else "Sin estado")
+                subtitle=(f"BBCH {ph.code_str(code)}" if code is not None else "Sin estado")
                 + f" · {p['week_label']}", in_reference=bool(p["in_reference"]), photo=p)
             row.ids.thumb_box.add_widget(thumb_widget(p["path"]))
             row.bind(on_release=lambda w: self.label_dialog(w, w.photo))
@@ -2482,12 +2482,12 @@ class AILabScreen(MDScreen):
             if obs and obs["bbch_code"] is None:
                 a.db.update_observation(obs["id"], bbch_code=code,
                                         bbch_label=ph.bbch_label(code, a.db.bbch_names()))
-            a.toast(f"Referencia agregada: BBCH {code:02d}")
+            a.toast(f"Referencia agregada: BBCH {ph.code_str(code)}")
             self.refresh_label()
 
         extra = []
         if photo["bbch_code"] is not None:
-            extra.append((f"✓ Usar el registro: BBCH {photo['bbch_code']:02d}",
+            extra.append((f"✓ Usar el registro: BBCH {ph.code_str(photo['bbch_code'])}",
                           "Estado ya asignado en el muestreo", lambda: assign(photo["bbch_code"])))
         pick_dialog("¿Qué estado muestra la foto?", bbch_pick_items(a.db, assign, extra))
 
@@ -2519,7 +2519,7 @@ class AILabScreen(MDScreen):
         fast_clear(box)
         names = a.db.bbch_names()
         for code in sorted(counts):
-            box.add_widget(MindRow(title=f"BBCH {code:02d}", subtitle=names.get(code, ""),
+            box.add_widget(MindRow(title=f"BBCH {ph.code_str(code)}", subtitle=names.get(code, ""),
                                    value=str(counts[code])))
         if not counts:
             box.add_widget(_mind("MindMuted", text="Sin referencias: la IA usa solo los priors agronómicos."))
@@ -2581,7 +2581,7 @@ class AILabScreen(MDScreen):
         box.height, box.opacity = dp(190), 1
         self.ids.try_label.text = s.label
         self.ids.try_conf.value = s.confidence
-        alts = " · ".join(f"BBCH {code:02d} {p:.0%}" for code, p in s.top[1:])
+        alts = " · ".join(f"BBCH {ph.code_str(code)} {p:.0%}" for code, p in s.top[1:])
         self.ids.try_explain.text = f"Confianza {s.confidence:.0%} · alternativas: {alts}\n{s.explanation}"
 
     # ------------------------------------------- compartir entre teléfonos
@@ -2686,7 +2686,7 @@ class AILabScreen(MDScreen):
         a.media.pick_document(done)
 
     def show_scale(self):
-        rows = [(f"BBCH {r['code']:02d}: {r['label']}", f"[{r['source']}] {r['description']}")
+        rows = [(f"BBCH {ph.code_str(r['code'])}: {r['label']}", f"[{r['source']}] {r['description']}")
                 for r in app().db.list_bbch()]
         list_dialog("Escala BBCH · frambueso", rows)
 

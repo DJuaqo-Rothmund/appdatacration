@@ -18,7 +18,7 @@
   <div class="head" style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
     <h3>{{ s.variety.name }}</h3>
     <span class="small muted">
-      {% if s.first is not none %}BBCH {{ '%02d'|format(s.first) }} → {{ '%02d'|format(s.last) }}
+      {% if s.first is not none %}BBCH {{ s.first|code }} → {{ s.last|code }}
       {% if s.advance is not none %}· avance {{ s.advance }} unidades BBCH{% endif %}
       {% else %}Sin registros en el período{% endif %}
     </span>
@@ -30,7 +30,7 @@
       {% elif t.img.canopy %}<img src="{{ t.img.canopy }}" alt="Canopia {{ t.week|wk }}" loading="lazy">
       {% else %}<div class="nophoto">Sin foto</div>{% endif %}
       <div class="t">{{ t.week|wks }} · {{ t.week.label|replace('Semana del ', '') }}</div>
-      <div class="b">{% if t.code is not none %}BBCH {{ '%02d'|format(t.code) }}{% else %}<span class="muted">—</span>{% endif %}</div>
+      <div class="b">{% if t.code is not none %}BBCH {{ t.code|code }}{% else %}<span class="muted">—</span>{% endif %}</div>
     </div>
     {% endfor %}
   </div>

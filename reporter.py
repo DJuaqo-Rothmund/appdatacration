@@ -35,8 +35,8 @@ import phenology as ph
 from platform_utils import APP_NAME, resource_path, slugify
 
 PHOTO_KINDS = (("canopy", "Canopia / planta completa"), ("detail", "Detalle / macro"))
-MILESTONES = [(51, "Botón floral"), (61, "Inicio floración"), (65, "Plena floración"),
-              (71, "Cuajado"), (81, "Pinta"), (87, "Cosecha")]
+MILESTONES = [(51, "Botón floral"), (61, "Inicio floración"), (65, "50 % de flores"),
+              (71, "Cuajado"), (81, "Inicio coloración"), (891, "Inicio cosecha")]   # 891 = 89-1
 
 
 # ===========================================================================
@@ -50,7 +50,7 @@ def seq_color(code: int | None) -> tuple[str, str]:
     """(fondo, texto) para un código BBCH en la rampa secuencial."""
     if code is None:
         return "transparent", "inherit"
-    t = max(0.0, min(1.0, code / 99.0)) ** 0.85
+    t = max(0.0, min(1.0, ph.bbch_value(code) / 99.0)) ** 0.85
     rgb = tuple(round(a + (b - a) * t) for a, b in zip(_SEQ_LIGHT, _SEQ_DARK))
     lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255
     return "#%02x%02x%02x" % rgb, ("#ffffff" if lum < 0.5 else "#1f2413")
@@ -135,7 +135,7 @@ def svg_progress(points: list[tuple[int, int]], week_min: int, week_max: int,
         return pad_l + (week - week_min) / span * w
 
     def y(code):
-        return pad_t + (1 - code / 99.0) * h
+        return pad_t + (1 - ph.bbch_value(code) / 99.0) * h
 
     pts = sorted(points)
     path = f"M{x(pts[0][0]):.1f},{y(pts[0][1]):.1f}"
@@ -196,7 +196,7 @@ def compare_chart(series: list[dict], week_min: int, week_max: int,
         return pl + (wk - week_min) / (week_max - week_min) * w
 
     def y(code):
-        return pt + (1 - code / 99.0) * h
+        return pt + (1 - ph.bbch_value(code) / 99.0) * h
 
     out = [f'<svg class="cmp" viewBox="0 0 {W} {H}" role="img" '
            f'aria-label="Estado BBCH por semana, comparación entre variedades">']
@@ -244,7 +244,7 @@ def _default_selection(heat_rows: list[dict], k: int = 2) -> list[int]:
     last = [t for t in last if t[1] is not None]
     if not last:
         return []
-    last.sort(key=lambda t: t[1])
+    last.sort(key=lambda t: ph.bbch_value(t[1]))
     ids = [last[-1][0], last[0][0]]
     return list(dict.fromkeys(ids))[:k]
 
@@ -273,6 +273,7 @@ class ReportGenerator:
         self.env.filters["seq"] = seq_color
         self.env.filters["date_es"] = lambda s: ph.format_date_es(_dt.date.fromisoformat(s[:10]))
         self.env.filters["num"] = self._num
+        self.env.filters["code"] = ph.code_str     # «07», «65», «89-1»
         self.env.filters["wk"] = ph.week_title      # «Semana 33, año 2026»
         self.env.filters["wks"] = ph.week_short     # «S33»
         self.env.globals.update(macro_name=lambda c: ph.MACRO_STAGES.get(ph.macro_of(c), ""),
@@ -462,7 +463,8 @@ class ReportGenerator:
             first = next((t["code"] for t in tiles if t["code"] is not None), None)
             last = next((t["code"] for t in reversed(tiles) if t["code"] is not None), None)
             strips.append({"variety": v, "tiles": tiles, "first": first, "last": last,
-                           "advance": (last - first) if first is not None and last is not None else None})
+                           "advance": round(ph.bbch_value(last) - ph.bbch_value(first), 1) + 0.0
+                           if first is not None and last is not None else None})
         start = _dt.date.fromisoformat(weeks[0]["start_date"])
         end = _dt.date.fromisoformat(weeks[-1]["start_date"]) + _dt.timedelta(days=6)
         title = title or f"Evolución · Semanas {ph.week_of_year(weeks[0])}–{ph.week_of_year(weeks[-1])}"
@@ -497,7 +499,7 @@ class ReportGenerator:
                              min(p[0] for p in pts) + 1), wlabel=self._wlabel(season)) if pts else ""
         milestones = []
         for code, name in MILESTONES:
-            hit = next((p for p in sorted(pts) if p[1] >= code), None)
+            hit = next((p for p in sorted(pts) if ph.bbch_value(p[1]) >= ph.bbch_value(code)), None)
             milestones.append({"code": code, "name": name,
                                "week": self._wlabel(season)(hit[0]) if hit else None})
         metrics = self.db.get_metrics(variety_id, season)
@@ -535,7 +537,7 @@ class ReportGenerator:
         # Precocidad relativa: diferencia media vs. el promedio de las variedades por semana.
         week_means = {}
         for i, w in enumerate(weeks):
-            vals = [r["cells"][i]["code"] for r in heat if r["cells"][i]["code"] is not None]
+            vals = [ph.bbch_value(r["cells"][i]["code"]) for r in heat if r["cells"][i]["code"] is not None]
             if len(vals) >= 2:
                 week_means[w["week_number"]] = sum(vals) / len(vals)
         rows = []
@@ -543,11 +545,11 @@ class ReportGenerator:
         gk = "canopy" if self.photo_mode == "canopy" else "detail"   # galería paralela
         for r in heat:
             pts = [(c["week"]["week_number"], c["code"]) for c in r["cells"] if c["code"] is not None]
-            deltas = [code - week_means[wk] for wk, code in pts if wk in week_means]
+            deltas = [ph.bbch_value(code) - week_means[wk] for wk, code in pts if wk in week_means]
             delta = round(sum(deltas) / len(deltas), 1) + 0.0 if deltas else None  # evita «-0.0»
             hits = []
             for code, name in MILESTONES:
-                hit = next((p for p in sorted(pts) if p[1] >= code), None)
+                hit = next((p for p in sorted(pts) if ph.bbch_value(p[1]) >= ph.bbch_value(code)), None)
                 hits.append(self._wlabel(season)(hit[0]) if hit else None)
             gallery = []
             for c in r["cells"]:

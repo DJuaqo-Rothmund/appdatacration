@@ -32,7 +32,7 @@
 
 {% macro ai_line(item) -%}
 {% if item.ai_code is not none %}
-<div class="ai">Sugerencia IA: <strong>BBCH {{ '%02d'|format(item.ai_code) }}</strong>
+<div class="ai">Sugerencia IA: <strong>BBCH {{ item.ai_code|code }}</strong>
   {% if item.ai_conf is not none %}({{ (item.ai_conf * 100)|round|int }} % conf.){% endif %}
   {% if item.ai_accepted == 1 %}<span class="tag">aceptada</span>{% elif item.ai_accepted == 0 %}<span class="tag">corregida</span>{% endif %}
 </div>
@@ -49,7 +49,7 @@
   <tr><td class="name">{{ r.variety.name }}</td>
     {% for c in r.cells %}
       {% if c.code is not none %}{% set col = c.code|seq %}
-      <td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ r.variety.name }} · {{ c.week|wk }} ({{ c.week.label }}) · {{ c.code|bbch }}">{{ '%02d'|format(c.code) }}</td>
+      <td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ r.variety.name }} · {{ c.week|wk }} ({{ c.week.label }}) · {{ c.code|bbch }}">{{ c.code|code }}</td>
       {% else %}<td class="c na" title="{{ r.variety.name }} · {{ c.week|wk }} · sin registro">·</td>{% endif %}
     {% endfor %}
   </tr>

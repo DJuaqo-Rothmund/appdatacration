@@ -21,7 +21,92 @@ from dataclasses import dataclass
 # Escala BBCH — frambueso
 # ---------------------------------------------------------------------------
 # (código, etiqueta corta, descripción de campo, palabras clave)
-BBCH_RUBUS: list[tuple[int, str, str, str]] = [
+# Escala BBCH del frambueso (Rubus idaeus) para cañas anuales y brotes laterales de las
+# cañas de soporte (tabla de referencia del usuario, oct. 2026): (código, cañas anuales,
+# brotes laterales); None = no aplica. Los códigos de 3 cifras son subestadios y se
+# muestran «89-1» (891 = subestadio 1 del 89). Más abajo se completan con los estados
+# que la app ya usaba y que no están en la tabla (registros anteriores).
+BBCH_TABLE: list[tuple[int, str | None, str | None]] = [
+    (0, None, "Dormancia"),
+    (7, None, "Inicio de la brotación"),
+    (9, "Los brotes rompen la superficie del suelo", "Las yemas muestran puntas verdes"),
+    (10, "Primeras hojas extendidas", "Primeras hojas extendidas"),
+    (11, "Primera hoja desplegada", "Primera hoja desplegada"),
+    (12, "Segunda hoja desplegada", "Segunda hoja desplegada"),
+    (13, "Tercera hoja desplegada; etc.", "Tercera hoja desplegada; etc."),
+    (16, "Seis o más hojas desplegadas", "Seis o más hojas desplegadas"),
+    (31, "10 % del crecimiento máximo alcanzado (25 cm)", None),
+    (33, "30 % del crecimiento máximo alcanzado (75 cm)", None),
+    (36, "60 % del crecimiento máximo alcanzado (150 cm)", None),
+    (39, "Longitud máxima alcanzada", None),
+    (51, "Se hacen visibles los primeros capullos", "Se hacen visibles los primeros capullos"),
+    (553, "Los tallos florales se estiran (capullos juntos)",
+     "Los tallos florales se estiran (capullos juntos)"),
+    (55, "Los tallos florales se estiran (capullos separados)",
+     "Los tallos florales se estiran (capullos separados)"),
+    (57, "Los capullos se inclinan, algunos de color rojizo",
+     "Los capullos se inclinan, algunos de color rojizo"),
+    (59, "Los pétalos (blancos) son visibles, la flor aún está cerrada (etapa muy corta)",
+     "Los pétalos (blancos) son visibles, la flor aún está cerrada (etapa muy corta)"),
+    (60, "Primeras flores abiertas en casos aislados", "Primeras flores abiertas en casos aislados"),
+    (61, "Inicio de la floración: 10 % de las flores abiertas o marchitas",
+     "Inicio de la floración: 10 % de las flores abiertas o marchitas"),
+    (63, "30 % de las flores abiertas o marchitas", "30 % de las flores abiertas o marchitas"),
+    (65, "Final de la floración: 50 % de las flores abiertas o marchitas",
+     "Final de la floración: 50 % de las flores abiertas o marchitas"),
+    (69, "Fin de la floración: la mayoría de las flores marchitas y fructifican",
+     "Fin de la floración: la mayoría de las flores marchitas y fructifican"),
+    (71, "10 % de frutos jóvenes visibles", "10 % de frutos jóvenes visibles"),
+    (73, "30 % de frutos jóvenes visibles", "30 % de frutos jóvenes visibles"),
+    (75, "50 % de frutos jóvenes visibles", "50 % de frutos jóvenes visibles"),
+    (77, "70 % de frutos jóvenes visibles", "70 % de frutos jóvenes visibles"),
+    (79, "Casi todos los frutos jóvenes visibles", "Casi todos los frutos jóvenes visibles"),
+    (81, "Inicio de la coloración de los primeros frutos",
+     "Inicio de la coloración de los primeros frutos"),
+    (85, "Progresión de la coloración de los primeros frutos",
+     "Progresión de la coloración de los primeros frutos"),
+    (89, "Maduración completa: coloración típica de los primeros frutos alcanzada",
+     "Maduración completa: coloración típica de los primeros frutos alcanzada"),
+    (891, "10 % de los frutos cosechados", "10 % de los frutos cosechados"),
+    (893, "30 % de los frutos cosechados", "30 % de los frutos cosechados"),
+    (895, "50 % de los frutos cosechados", "50 % de los frutos cosechados"),
+    (897, "70 % de los frutos cosechados", "70 % de los frutos cosechados"),
+    (899, "Casi todos los frutos cosechados", "Casi todos los frutos cosechados"),
+    (91, "Crecimiento completo del brote, follaje aún verde", None),
+    (93, "Coloración de las hojas", None),
+    (95, "Caída de hojas", None),
+    (97, "Latencia de la vegetación", "Muere el brote de dos años que sostenía las cañas"),
+    (99, "Cosecha", "Cosecha"),
+]
+
+
+def _lower1(t: str) -> str:
+    return t[0].lower() + t[1:] if t else t
+
+
+def _table_entry(code: int, canes: str | None, laterals: str | None):
+    """(código, nombre, descripción, palabras clave) a partir de las dos columnas."""
+    import re
+    import unicodedata
+    if canes and laterals and canes != laterals:
+        label = f"Cañas: {_lower1(canes)} · Laterales: {_lower1(laterals)}"
+    elif canes and not laterals:
+        label = f"Cañas anuales: {_lower1(canes)}"
+    elif laterals and not canes:
+        label = f"Brotes laterales: {_lower1(laterals)}"
+    else:
+        label = canes or laterals or ""
+    desc = (f"Cañas anuales (cañas jóvenes): {canes or '—'}\n"
+            f"Brotes laterales de las cañas de soporte: {laterals or '—'}")
+    words = unicodedata.normalize("NFKD", f"{canes or ''} {laterals or ''}".lower())
+    words = "".join(ch for ch in words if not unicodedata.combining(ch))
+    kw = " ".join(dict.fromkeys(w for w in re.findall(r"[a-z0-9]+", words) if len(w) > 2))
+    return code, label, desc, kw
+
+
+# Estados que la app usaba antes y que no están en la tabla (se conservan para los
+# registros ya hechos y como estados intermedios).
+_PREVIOUS: list[tuple[int, str, str, str]] = [
     # Estadio principal 0: Desarrollo de yemas
     (0, "Dormancia", "Yemas cerradas, cubiertas por escamas pardas.",
      "latencia dormancia yema cerrada escamas pardas invierno"),
@@ -100,15 +185,28 @@ BBCH_RUBUS: list[tuple[int, str, str, str]] = [
      "fin caida hojas reposo"),
 ]
 
+BBCH_SCALE_VERSION = 2   # sube cuando cambia la escala base (se actualiza en las bases)
+
+
+def _scale_value(code: int) -> float:
+    return float(code) if code < 100 else code // 10 + (code % 10) / 10
+
+
+BBCH_RUBUS: list[tuple[int, str, str, str]] = sorted(
+    [_table_entry(*row) for row in BBCH_TABLE]
+    + [e for e in _PREVIOUS if e[0] not in {row[0] for row in BBCH_TABLE}],
+    key=lambda e: _scale_value(e[0]))
+
+
 MACRO_STAGES: dict[int, str] = {
-    0: "Desarrollo de yemas",
-    1: "Desarrollo de hojas",
-    3: "Crecimiento de brotes",
-    5: "Aparición floral",
+    0: "Brotación",
+    1: "Desarrollo de las hojas",
+    3: "Desarrollo del brote",
+    5: "Desarrollo del botón floral",
     6: "Floración",
     7: "Desarrollo del fruto",
-    8: "Maduración",
-    9: "Senescencia",
+    8: "Maduración del fruto",
+    9: "Inicio de la latencia",
 }
 
 # Colores por estadio principal (usados en reportes / chips de UI).
@@ -125,9 +223,31 @@ MACRO_COLORS: dict[int, str] = {
 
 
 def macro_of(code: int | None) -> int | None:
+    """Estadio principal: 65 -> 6; 891 (= 89-1) -> 8."""
     if code is None:
         return None
-    return int(code) // 10
+    code = int(code)
+    return code // 100 if code >= 100 else code // 10
+
+
+def bbch_value(code: int | None) -> float | None:
+    """Posición en la escala para ordenar, graficar y promediar: 891 (89-1) -> 89,1."""
+    if code is None:
+        return None
+    return _scale_value(int(code))
+
+
+def code_str(code: int | None) -> str:
+    """Código para mostrar: 7 -> «07», 65 -> «65», 891 -> «89-1»."""
+    if code is None:
+        return "—"
+    code = int(code)
+    return f"{code // 10}-{code % 10}" if code >= 100 else f"{code:02d}"
+
+
+def bbch_sorted(rows, key=lambda r: r["code"]):
+    """Ordena estados por su posición en la escala (89-1 va entre 89 y 91)."""
+    return sorted(rows, key=lambda r: _scale_value(int(key(r))))
 
 
 def bbch_label(code: int | None, catalog: dict[int, str] | None = None) -> str:
@@ -139,7 +259,7 @@ def bbch_label(code: int | None, catalog: dict[int, str] | None = None) -> str:
     if name is None:
         # Código no catalogado: devolver el estadio principal.
         name = MACRO_STAGES.get(macro_of(code), "Estadio no catalogado")
-    return f"BBCH {int(code):02d}: {name}"
+    return f"BBCH {code_str(code)}: {name}"
 
 
 def parse_bbch_code(text: str | None) -> int | None:
@@ -147,11 +267,14 @@ def parse_bbch_code(text: str | None) -> int | None:
     if not text:
         return None
     import re
-    m = re.search(r"(?:BBCH\s*)?(\d{1,2})\b", str(text), flags=re.I)
+    # «BBCH 65», «65», «BBCH 89-1» (subestadio) o «891».
+    m = re.search(r"(?:BBCH\s*)?\b(\d{1,3})(?:-(\d))?\b", str(text), flags=re.I)
     if not m:
         return None
+    if m.group(2) is not None and len(m.group(1)) <= 2:
+        return int(m.group(1)) * 10 + int(m.group(2))
     v = int(m.group(1))
-    return v if 0 <= v <= 99 else None
+    return v if 0 <= v <= 999 else None
 
 
 # ---------------------------------------------------------------------------

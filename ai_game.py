@@ -116,7 +116,7 @@ class DailyChallenge:
         pool = [c for c in codes if c not in options]
         while len(options) < 4 and pool:
             options.append(pool.pop(rnd.randrange(len(pool))))
-        options = sorted(options[:4])
+        options = sorted(options[:4], key=ph.bbch_value)
         return ("identify", {"photo_id": photo["id"], "path": photo["path"], "truth": truth,
                              "ai": ai[0] if ai else None, "options": options,
                              "variety": photo["variety_name"], "week": ph.week_title(photo)})
@@ -127,7 +127,7 @@ class DailyChallenge:
         weights = []
         for r in self.db.list_bbch():
             c = r["code"]
-            w = math.exp(-((c - expected) / 18.0) ** 2) / (1 + counts.get(c, 0)) + 0.02
+            w = math.exp(-((ph.bbch_value(c) - expected) / 18.0) ** 2) / (1 + counts.get(c, 0)) + 0.02
             weights.append((c, w))
         chosen: list[int] = []
         while len(chosen) < n and weights:
@@ -203,7 +203,7 @@ class DailyChallenge:
         target = int(ch["payload"]["target"])
         probs = self.classifier.probabilities(image_path)
         ai = max(probs, key=probs.get)
-        agree = ai // 10 == target // 10
+        agree = ph.macro_of(ai) == ph.macro_of(target)
         self.classifier.add_reference(image_path, target)
         res = self._finish(ch, image_path, int(agree), XP["capture"] + (XP["capture_bonus"] if agree else 0))
         res.update({"ai": ai, "target": target, "agree": agree})

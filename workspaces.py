@@ -85,6 +85,7 @@ class Workspaces:
         if not self.shared.query_one("SELECT 1 FROM bbch_stages LIMIT 1"):
             for code, label, desc, kw in ph.BBCH_RUBUS:
                 self.shared.upsert_bbch(code, label, desc, kw, source="base")
+        self.shared.refresh_bbch_scale()   # escala BBCH del frambueso al día (cañas y laterales)
         self.ensure_initial()
 
     # ----------------------------------------------------------- registro

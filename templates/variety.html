@@ -29,7 +29,7 @@
 {% if compare %}{{ compare_chart(compare, "cmp-variety") }}{% else %}<div class="card" style="padding: 12px;">{{ chart|safe }}</div>{% endif %}
 <div class="scroll-x" style="margin-top: 12px;">
 <table>
-  <thead><tr>{% for m in milestones %}<th>{{ m.name }} (≥{{ m.code }})</th>{% endfor %}</tr></thead>
+  <thead><tr>{% for m in milestones %}<th>{{ m.name }} (≥{{ m.code|code }})</th>{% endfor %}</tr></thead>
   <tbody><tr>{% for m in milestones %}<td>{% if m.week %}Semana {{ m.week }}{% else %}<span class="muted">—</span>{% endif %}</td>{% endfor %}</tr></tbody>
 </table>
 </div>

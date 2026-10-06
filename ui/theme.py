@@ -83,7 +83,8 @@ STAGE_COLORS = {
 def stage_colors(code):
     if code is None:
         return c("#FFFFFF", .55), c(MUTED)
-    bg, fg = STAGE_COLORS.get(int(code) // 10, ("#FFFFFF", INK))
+    import phenology as ph
+    bg, fg = STAGE_COLORS.get(ph.macro_of(code), ("#FFFFFF", INK))
     return c(bg, .92), c(fg)
 
 
