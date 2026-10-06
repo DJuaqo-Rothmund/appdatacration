@@ -196,6 +196,103 @@ def bbch_pick_items(db, callback, extra: list | None = None) -> list[tuple]:
     return items
 
 
+class ScaleGroup(ButtonBehavior, GlassCard):
+    title = StringProperty()
+    count = StringProperty()
+    accent = ColorProperty(c(theme.LEAF_SOFT))
+    expanded = BooleanProperty(False)
+    macro = NumericProperty(0)
+
+
+class ScaleRow(ButtonBehavior, GlassCard):
+    code = StringProperty()
+    text = StringProperty()
+    accent = ColorProperty(c(theme.LEAF_SOFT))
+    current = BooleanProperty(False)
+
+
+def bbch_dialog(title: str, db, callback, extra: list | None = None, current: int | None = None):
+    """Escala BBCH casi a todo el ancho, agrupada por macroestadio en desplegables
+    (se abre el del estado actual). Cada estado muestra su texto completo
+    (cañas anuales y brotes laterales en líneas separadas)."""
+    global _pick_open
+    if _pick_open is not None:
+        return _pick_open
+    from kivy.core.window import Window
+    from kivy.uix.scrollview import ScrollView
+    from kivy.utils import escape_markup
+    dialog = None
+    stages = db.list_bbch()
+    groups: dict[int, list] = {}
+    for r in stages:
+        groups.setdefault(ph.macro_of(r["code"]), []).append(r)
+    opened = {ph.macro_of(current)} if current is not None else set()
+    state = {}
+    box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6), padding=(0, dp(2)))
+    scroll = ScrollView(size_hint_y=None, height=Window.height * .64, do_scroll_x=False, bar_width=dp(4))
+    scroll.add_widget(box)
+
+    def pick(code):
+        dialog.dismiss()
+        callback(code)
+
+    def toggle(head):
+        if head.macro in opened:
+            opened.discard(head.macro)
+        else:
+            opened.clear()          # acordeón: un macroestadio abierto a la vez
+            opened.add(head.macro)
+        build()
+        Clock.schedule_once(lambda *_: scroll.scroll_to(head, padding=dp(4), animate=False), 0)
+
+    def body(r) -> str:
+        label = escape_markup(r["label"]).replace(" · Laterales: ", "\n[b]Laterales:[/b] ")
+        for k in ("Cañas: ", "Cañas anuales: ", "Brotes laterales: "):
+            if label.startswith(k):
+                return f"[b]{k.strip()}[/b] " + label[len(k):]
+        return label
+
+    def build():
+        box.clear_widgets()
+        for t, sub, cb, *rest in (extra or []):
+            row = PickRow(title=t, subtitle=sub or "", accent=rest[0] if rest else c(theme.LEAF_SOFT))
+            row.action = lambda cb=cb: (dialog.dismiss(), cb())
+            box.add_widget(row)
+        for macro in sorted(groups):
+            rows = groups[macro]
+            bg, _fg = theme.stage_colors(rows[0]["code"])
+            head = ScaleGroup(title=f"{macro} · {ph.MACRO_STAGES.get(macro, '')}", macro=macro,
+                              count=f"{len(rows)} estados", accent=bg, expanded=macro in opened)
+            head.bind(on_release=toggle)
+            box.add_widget(head)
+            if macro not in opened:
+                continue
+            for r in rows:
+                row = ScaleRow(code=ph.code_str(r["code"]), text=body(r), accent=bg,
+                               current=r["code"] == current)
+                row.bind(on_release=lambda _w, code=r["code"]: pick(code))
+                box.add_widget(row)
+                if row.current:
+                    state["current_row"] = row
+
+    build()
+    dialog = MDDialog(title=title, type="custom", content_cls=scroll, md_bg_color=DIALOG_BG,
+                      size_hint=(.96, None),
+                      buttons=[MDFlatButton(text="CERRAR", on_release=lambda *_: dialog.dismiss())])
+
+    def closed(*_):
+        global _pick_open
+        _pick_open = None
+
+    dialog.bind(on_dismiss=closed)
+    _pick_open = dialog
+    dialog.open()
+    if state.get("current_row") is not None:   # mostrar el estado actual sin buscarlo
+        Clock.schedule_once(lambda *_: scroll.scroll_to(state["current_row"], padding=dp(60),
+                                                        animate=False), .15)
+    return dialog
+
+
 def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outline"):
     """Marcador inmediato; la miniatura se genera en segundo plano y lo reemplaza."""
     box = GlassCard(md_bg_color=c(theme.LEAF_SOFT, .8), line_color=c("#FFFFFF", .9),
@@ -1576,7 +1673,8 @@ class ObservationScreen(MDScreen):
             self._set_bbch(self.obs["ai_code"])
 
     def open_scale(self, caller):
-        pick_dialog("Escala BBCH · frambueso", bbch_pick_items(app().db, self._set_bbch))
+        bbch_dialog("Escala BBCH · frambueso", app().db, self._set_bbch,
+                    current=ph.parse_bbch_code(self.ids.bbch.text or ""))
 
     # -------------------------------------------------------------- guardar
     def save(self):
@@ -2722,7 +2820,7 @@ class AILabScreen(MDScreen):
         if photo["bbch_code"] is not None:
             extra.append((f"✓ Usar el registro: BBCH {ph.code_str(photo['bbch_code'])}",
                           "Estado ya asignado en el muestreo", lambda: assign(photo["bbch_code"])))
-        pick_dialog("¿Qué estado muestra la foto?", bbch_pick_items(a.db, assign, extra))
+        bbch_dialog("¿Qué estado muestra la foto?", a.db, assign, extra, current=photo["bbch_code"])
 
     def add_all_labeled(self):
         a = app()

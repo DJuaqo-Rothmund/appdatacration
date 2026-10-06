@@ -94,6 +94,91 @@
             theme_text_color: "Custom"
             text_color: c(theme.MUTED)
 
+<ScaleGroup>:
+    orientation: "horizontal"
+    size_hint_y: None
+    height: dp(50)
+    padding: dp(12), dp(4), dp(8), dp(4)
+    spacing: dp(10)
+    radius: [dp(14)]
+    md_bg_color: root.accent if root.expanded else (1, 1, 1, .7)
+    line_color: c(theme.LINE)
+    Widget:
+        size_hint: None, None
+        size: dp(14), dp(14)
+        pos_hint: {"center_y": .5}
+        canvas:
+            Color:
+                rgba: root.accent
+            Ellipse:
+                pos: self.pos
+                size: self.size
+            Color:
+                rgba: c(theme.LEAF_DARK, .4)
+            Line:
+                circle: (self.center_x, self.center_y, self.width / 2)
+                width: dp(1)
+    MDLabel:
+        text: root.title
+        font_style: "Subtitle2"
+        bold: True
+        shorten: True
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.INK)
+    MDLabel:
+        text: root.count
+        font_style: "Caption"
+        halign: "right"
+        size_hint_x: None
+        width: dp(64)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.MUTED)
+    MDIcon:
+        icon: "chevron-up" if root.expanded else "chevron-down"
+        size_hint: None, None
+        size: dp(24), dp(24)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF_DARK)
+
+<ScaleRow>:
+    orientation: "horizontal"
+    adaptive_height: True
+    padding: dp(10), dp(10), dp(12), dp(10)
+    spacing: dp(12)
+    radius: [dp(12)]
+    md_bg_color: c(theme.BERRY, .12) if root.current else (1, 1, 1, .78)
+    line_color: c(theme.BERRY) if root.current else c(theme.LINE)
+    MDLabel:
+        text: root.code
+        bold: True
+        halign: "center"
+        font_style: "Subtitle1"
+        size_hint: None, None
+        size: dp(48), dp(34)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.INK)
+        canvas.before:
+            Color:
+                rgba: root.accent
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(10)]
+    MDLabel:
+        text: root.text
+        markup: True
+        font_style: "Body2"
+        size_hint_y: None
+        pos_hint: {"center_y": .5}
+        text_size: self.width, None
+        height: self.texture_size[1]
+        theme_text_color: "Custom"
+        text_color: c(theme.INK)
+
 <PaperCard@GlassCard>:
     orientation: "vertical"
     padding: dp(16)
