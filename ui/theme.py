@@ -48,9 +48,10 @@ BACKGROUND = resource_path("assets", "ui", "background.jpg")
 LOGO = resource_path("assets", "ui", "logo.png")
 WORDMARK = resource_path("assets", "ui", "wordmark.png")   # letra «PhenoRubus App»
 # Pantalla de inicio: botones circulares e ícono de la IA (frambuesa-cerebro delineada)
-START_ID = resource_path("assets", "ui", "start_id.jpg")
-START_PREDIO = resource_path("assets", "ui", "start_predio.jpg")
-START_AI = resource_path("assets", "ui", "start_ai.jpg")
+START_ID = resource_path("assets", "ui", "start_id.png")           # trazo frambuesa
+START_PREDIO = resource_path("assets", "ui", "start_predio.png")   # trazo verde
+START_AI = resource_path("assets", "ui", "start_ai.png")           # azul estelar
+LOGO_LINE = resource_path("assets", "ui", "logo_line.png")         # logo a línea
 AI_ICON = resource_path("assets", "ui", "ai_outline.png")
 GOOGLE_G = resource_path("assets", "ui", "google_g.png")
 # Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android

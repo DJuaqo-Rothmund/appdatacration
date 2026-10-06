@@ -333,32 +333,19 @@
 # ---------------------------------------------------------------------------
 # Inicio: I+D / Predio, Asistente IA y cuenta de Google
 # ---------------------------------------------------------------------------
-<StartCircle>:
+<StartIcon>:
     orientation: "vertical"
     size_hint: None, None
-    size: root.diameter + dp(20), root.diameter + dp(40)
-    spacing: dp(8)
-    Widget:
+    size: root.diameter + dp(16), root.diameter + dp(34)
+    spacing: dp(6)
+    Image:
+        source: root.source
         size_hint: None, None
         size: root.diameter, root.diameter
         pos_hint: {"center_x": .5}
-        canvas:
-            Color:
-                rgba: 0, 0, 0, .10
-            Ellipse:
-                pos: self.x + dp(1), self.y - dp(3)
-                size: self.size
-            Color:
-                rgba: (.86, .86, .86, 1) if root.state == "down" else (1, 1, 1, 1)
-            Ellipse:
-                pos: self.pos
-                size: self.size
-                source: root.source
-            Color:
-                rgba: 1, 1, 1, .9
-            Line:
-                circle: (self.center_x, self.center_y, self.width / 2)
-                width: dp(2.2)
+        fit_mode: "contain"
+        mipmap: True
+        opacity: .55 if root.state == "down" else 1
     MDLabel:
         text: root.label
         halign: "center"
@@ -367,7 +354,7 @@
         size_hint_y: None
         height: dp(18)
         theme_text_color: "Custom"
-        text_color: c(theme.LEAF_DARK)
+        text_color: root.color
 
 <GoogleButton>:
     size_hint: 1, None
@@ -418,34 +405,41 @@
         padding: dp(24), dp(28), dp(24), dp(22)
         spacing: dp(10)
         Image:
+            source: theme.LOGO_LINE
+            fit_mode: "contain"
+            mipmap: True
+            size_hint_y: None
+            height: dp(104)
+        Image:
             source: theme.WORDMARK
             fit_mode: "contain"
             mipmap: True
             size_hint_y: None
-            height: dp(56)
+            height: dp(44)
         Muted:
             id: ws_hint
             halign: "center"
         Widget:
         MDBoxLayout:
             size_hint: None, None
-            size: dp(150) * 2 + dp(28), dp(164)
+            size: dp(146) * 2 + dp(36), dp(176)
             pos_hint: {"center_x": .5}
-            spacing: dp(28)
-            StartCircle:
+            spacing: dp(36)
+            StartIcon:
                 source: theme.START_ID
                 label: "I+D"
+                color: c("#AB1D59")
                 on_release: root.open_profile("id")
-            StartCircle:
+            StartIcon:
                 source: theme.START_PREDIO
                 label: "Predio"
+                color: c("#2F5643")
                 on_release: root.open_profile("predio")
-        Widget:
-            size_hint_y: None
-            height: dp(8)
-        StartCircle:
+        StartIcon:
             source: theme.START_AI
             label: "Asistente IA"
+            color: c("#3A6BFF")
+            diameter: dp(140)
             pos_hint: {"center_x": .5}
             on_release: root.open_ai()
         Widget:

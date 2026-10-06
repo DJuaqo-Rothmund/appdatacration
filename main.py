@@ -240,6 +240,7 @@ class FenoRubusApp(MDApp):
         self.home = HomeScreen(name="home")  # el resto de pantallas se crea al primer uso
         self.sm.add_widget(self.home)
         self.home.refresh_current()
+        self.start   # la pantalla de inicio también se arma detrás del logo
         wait = max(0.0, self.SPLASH_MIN_S - (time.monotonic() - self._t_start))
         Clock.schedule_once(self._leave_splash, wait)
 
@@ -299,7 +300,9 @@ class FenoRubusApp(MDApp):
         inicio; si está usando la app, lo reintenta más tarde para no trabarla."""
         if not self._prewarm:
             return
-        if self.sm.current not in ("home", "start") or self.sm.transition.is_active:
+        # Solo en reposo en el muestreo: en la pantalla de inicio el usuario está por tocar
+        # algo y una precarga (≈0,5 s en teléfonos básicos) se sentiría como un tirón.
+        if self.sm.current != "home" or self.sm.transition.is_active:
             Clock.schedule_once(self._prewarm_next, 3)
             return
         step = self._prewarm.pop(0)

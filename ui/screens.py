@@ -434,11 +434,12 @@ class HomeScreen(MDScreen):
             self.ids.ws_banner.icon = "flask-outline" if ws["profile"] == "id" else "barn"
 
 
-class StartCircle(ButtonBehavior, MDBoxLayout):
-    """Botón circular con imagen y su nombre debajo (pantalla de inicio)."""
+class StartIcon(ButtonBehavior, BoxLayout):
+    """Botón de forma libre (ícono a línea) con su nombre debajo (pantalla de inicio)."""
     source = StringProperty()
     label = StringProperty()
-    diameter = NumericProperty(dp(124))
+    color = ColorProperty([0, 0, 0, 1])
+    diameter = NumericProperty(dp(130))
 
 
 class GoogleButton(ButtonBehavior, FloatLayout):
@@ -450,7 +451,8 @@ class StartScreen(MDScreen):
     """Lo primero que se ve al abrir la app: I+D, Predio, Asistente IA y la cuenta de Google."""
 
     def on_pre_enter(self, *_):
-        self.refresh()
+        # La pantalla aparece al instante; los textos (consultas a la base) justo después.
+        Clock.schedule_once(lambda *_: self.refresh(), 0)
 
     def refresh(self):
         a = app()
@@ -623,12 +625,21 @@ class WorkspacesScreen(MDScreen):
         fast_clear(box)
         items = a.workspaces.list(self.profile, archived=self.show_archived)
         cur = getattr(a, "workspace", None) or {}
+        from workspaces import KINDS
+        rows = []
         for ws in items:
             row = WorkspaceRow(title=ws["name"], code=ws["code"], profile=ws["profile"],
-                               subtitle=self._stats(ws), current=ws["id"] == cur.get("id"),
-                               ws=ws, screen=self)
+                               subtitle=KINDS.get(ws["kind"], ws["kind"]),
+                               current=ws["id"] == cur.get("id"), ws=ws, screen=self)
             row.bind(on_release=lambda w: self.choose(w.ws))
             box.add_widget(row)
+            rows.append(row)
+        # Las estadísticas abren la base de cada ensayo: una por cuadro, ya con la lista a la vista.
+        def fill(i=0):
+            if i < len(rows) and rows[i].parent is box:
+                rows[i].subtitle = self._stats(rows[i].ws)
+                Clock.schedule_once(lambda *_: fill(i + 1), 0)
+        Clock.schedule_once(lambda *_: fill(), 0.05)
         if not items:
             box.add_widget(MDLabel(text="No hay archivados." if self.show_archived else "Aún no hay nada aquí.",
                                    font_style="Caption", adaptive_height=True, halign="center",
