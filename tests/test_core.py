@@ -148,10 +148,11 @@ def test_reports(db, tmp_path):
     r2 = rep.monthly(season, 2026, 9)
     r3 = rep.variety(db.list_varieties()[0]["id"], season)
     assert "<svg" in open(r3.path, encoding="utf-8").read()
-    r4 = rep.matrix(season, package="zip")
-    with zipfile.ZipFile(r4.path) as zf:
-        names = zf.namelist()
-    assert "index.html" in names and any(n.startswith("img/") for n in names)
+    r4 = rep.matrix(season, package="pdf")          # los informes se entregan en PDF
+    with open(r4.path, "rb") as f:
+        head = f.read(8)
+    assert head.startswith(b"%PDF-") and "fotos de detalle" in open(
+        rep.matrix(season).path, encoding="utf-8").read()
     assert all(os.path.exists(r.path) for r in (r1, r2, r3, r4))
 
 
@@ -447,13 +448,15 @@ def test_restore_old_sqlite_relinks_public_photos(db, tmp_path, monkeypatch):
     fresh.close()
 
 
-def test_import_weekly_reports_html_and_zip(db, tmp_path):
+def test_import_weekly_reports_html_and_pdf(db, tmp_path):
     from data_transfer import import_reports
     pairs = _fill_week(db, tmp_path)
     rep = ReportGenerator(db, str(tmp_path / "out"))
     weeks = sorted({w["id"] for _v, w in pairs})
-    files = [rep.weekly(weeks[0]).path, rep.weekly(weeks[1], package="zip").path,
-             rep.weekly(weeks[2]).path]
+    # Informes de versiones anteriores (HTML) y los actuales (PDF con los datos incrustados).
+    files = [rep.weekly(weeks[0]).path, rep.weekly(weeks[1], package="pdf").path,
+             rep.weekly(weeks[2], package="pdf").path]
+    assert files[1].endswith(".pdf")
     fresh = Database(str(tmp_path / "nuevo.sqlite3"))
     res = import_reports(fresh, files)
     assert res.reports == 3 and res.bbch == 6 and res.photos == 12, res.summary()
@@ -915,3 +918,38 @@ def test_photo_names_year_month_day_and_rename_existing(db, tmp_path):
     assert db.query_one("SELECT name FROM drive_queue WHERE drive_id='f9'")["name"].endswith("/20260928-C11G.jpg")
     drive.flush()
     assert len(patched) == 1                                           # una sola vez
+
+
+def test_pdf_reports_all_kinds_and_photo_mode(db, tmp_path):
+    """Los cuatro informes salen en PDF válido (texto legible, fotos incrustadas) y se
+    puede elegir qué foto representativa incluir: detalle, general o ambas."""
+    import pypdf
+    pairs = _fill_week(db, tmp_path)
+    v, w = pairs[0]
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    week = db.get_week(w["id"])
+    paths = [rep.weekly(w["id"], "pdf").path, rep.period(2026, 1, 3, "pdf").path,
+             rep.variety(v["id"], 2026, "pdf").path, rep.matrix(2026, package="pdf").path]
+    for p in paths:
+        assert p.endswith(".pdf")
+        reader = pypdf.PdfReader(p)
+        text = "".join(pg.extract_text() for pg in reader.pages)
+        assert "PhenoRubus" in text and "Página 1 de" in text
+    weekly = pypdf.PdfReader(paths[0])
+    text = "".join(pg.extract_text() for pg in weekly.pages)
+    assert ph.week_title(week) in text and v["name"] in text and "Registro fotográfico" in text
+
+    def jpeg_count(path):
+        xo = pypdf.PdfReader(path).pages[0]["/Resources"].get("/XObject") or {}
+        return len(xo)
+
+    full = jpeg_count(paths[0])
+    rep.photo_mode = "detail"
+    only_detail = jpeg_count(rep.weekly(w["id"], "pdf").path)
+    rep.photo_mode = "canopy"
+    canopy_pdf = rep.weekly(w["id"], "pdf").path
+    assert full == 2 * only_detail == 2 * jpeg_count(canopy_pdf)    # 2 variedades × 2 tipos
+    data = pypdf.PdfReader(canopy_pdf).attachments["phenorubus_semanal.json"][0]
+    import json
+    cards = [c for c in json.loads(data)["cards"] if c["photos"]]
+    assert len(cards) == 2 and all(set(c["photos"]) == {"canopy"} for c in cards)

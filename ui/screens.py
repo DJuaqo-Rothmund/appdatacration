@@ -801,7 +801,8 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
     def report(self):
         self.save()
         a = app()
-        a.run_report(lambda: a.reports.variety(self.variety_id, a.season))
+        r = a.configured_reports()
+        a.run_report(lambda: r.variety(self.variety_id, a.season, "pdf"))
 
 
 # ===========================================================================
@@ -1465,8 +1466,7 @@ class PreviewTab(MDScreen):
     # ----------------------------------------------------------- vista previa
     def open_preview(self):
         a = app()
-        r = a.reports
-        r.include_all_photos = bool(a.db.get_setting("report_all_photos", False))
+        r = a.configured_reports()
         args = self._args()
         kind = self.kind
         if kind == "weekly":
@@ -1526,6 +1526,7 @@ class ReportsTab(MDScreen):
     def refresh(self):
         a = app()
         self.ids.all_photos.active = bool(a.db.get_setting("report_all_photos", False))
+        self._photo_mode_label()
         weeks = a.db.list_weeks(a.season)
         if not weeks:
             weeks = [a.db.current_week()]
@@ -1587,10 +1588,28 @@ class ReportsTab(MDScreen):
             self._labels()
         open_menu(caller, [(v["name"], lambda v=v: choose(v)) for v in app().db.list_varieties()])
 
-    def generate(self, kind: str, package: str):
+    def pick_photo_mode(self):
         a = app()
-        r = a.reports
-        r.include_all_photos = bool(a.db.get_setting("report_all_photos", False))
+
+        def choose(mode):
+            a.db.set_setting("report_photo_mode", mode)
+            self._photo_mode_label()
+
+        from reporter import ReportGenerator
+        hints = {"both": "La foto general y la de detalle de cada variedad",
+                 "detail": "Solo la foto de detalle representativa",
+                 "canopy": "Solo la foto general (canopia) representativa"}
+        pick_dialog("Fotos en los informes", [(label, hints[mode], lambda m=mode: choose(m))
+                                              for mode, label in ReportGenerator.PHOTO_MODES.items()])
+
+    def _photo_mode_label(self):
+        from reporter import ReportGenerator
+        mode = app().db.get_setting("report_photo_mode", "both")
+        self.ids.photo_mode_btn.text = f"Fotos: {ReportGenerator.PHOTO_MODES.get(mode, mode)}"
+
+    def generate(self, kind: str, package: str = "pdf"):
+        a = app()
+        r = a.configured_reports()
         if kind == "weekly":
             job = lambda: r.weekly(self.sel_week["id"], package)  # noqa: E731
         elif kind == "period":
@@ -1612,7 +1631,7 @@ class ReportsTab(MDScreen):
         fast_clear(box)
         folder = app().reports.out_dir
         files = sorted((os.path.join(folder, f) for f in os.listdir(folder)
-                        if f.endswith((".html", ".zip"))), key=os.path.getmtime, reverse=True)
+                        if f.endswith((".pdf", ".html", ".zip"))), key=os.path.getmtime, reverse=True)
         for p in files[:10]:
             ts = _dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%d-%m-%Y %H:%M")
             box.add_widget(ReportRow(title=os.path.basename(p), path=p,
@@ -1937,8 +1956,8 @@ class SettingsTab(MDScreen):
         def picked(path, name):
             if not path:
                 return
-            if not path.lower().endswith((".html", ".htm", ".zip")):
-                a.toast("Elija un informe semanal (.html o .zip)")
+            if not path.lower().endswith((".pdf", ".html", ".htm", ".zip")):
+                a.toast("Elija un informe semanal (PDF, o .html/.zip de versiones anteriores)")
                 return
             self._busy(f"Leyendo {name or os.path.basename(path)}…")
 
@@ -1953,7 +1972,7 @@ class SettingsTab(MDScreen):
 
             a.workers.submit(work)
 
-        a.media.pick_document(picked, exts=(".html", ".htm", ".zip"))
+        a.media.pick_document(picked, exts=(".pdf", ".html", ".htm", ".zip"))
 
     def _reports_done(self, res, error):
         a = app()

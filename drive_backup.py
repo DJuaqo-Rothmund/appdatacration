@@ -562,7 +562,8 @@ class DriveBackup:
             data = f.read()
         ext = os.path.splitext(path)[1].lower()
         mime = {".png": "image/png", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
-                ".html": "text/html"}.get(ext, "image/jpeg")
+                ".html": "text/html", ".pdf": "application/pdf",
+                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}.get(ext, "image/jpeg")
         boundary = uuid.uuid4().hex
         meta = json.dumps({"name": fname, "parents": [parent]}).encode()
         body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()

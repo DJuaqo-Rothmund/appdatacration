@@ -572,6 +572,11 @@
                     Body:
                         text: "Incluir todas las fotos (no solo la principal)"
                         pos_hint: {"center_y": .5}
+                GhostButton:
+                    id: photo_mode_btn
+                    icon: "image-multiple-outline"
+                    text: "Fotos: Full (general y detalle)"
+                    on_release: root.pick_photo_mode()
             PaperCard:
                 SectionLabel:
                     text: "1 · REPORTE SEMANAL INTER-VARIETAL"
@@ -582,16 +587,9 @@
                     icon: "calendar-week"
                     text: "Seleccionar semana"
                     on_release: root.pick_week(self, "week")
-                MDBoxLayout:
-                    adaptive_height: True
-                    spacing: dp(8)
-                    PrimaryButton:
-                        text: "HTML"
-                        on_release: root.generate("weekly", "html")
-                    PrimaryButton:
-                        text: "ZIP portátil"
-                        md_bg_color: c(theme.LEAF_DARK)
-                        on_release: root.generate("weekly", "zip")
+                PrimaryButton:
+                    text: "Generar PDF"
+                    on_release: root.generate("weekly")
             PaperCard:
                 SectionLabel:
                     text: "2 · EVOLUCIÓN MENSUAL / RANGO DE SEMANAS"
@@ -615,16 +613,9 @@
                         icon: "ray-end"
                         text: "Hasta"
                         on_release: root.pick_week(self, "to")
-                MDBoxLayout:
-                    adaptive_height: True
-                    spacing: dp(8)
-                    PrimaryButton:
-                        text: "HTML"
-                        on_release: root.generate("period", "html")
-                    PrimaryButton:
-                        text: "ZIP portátil"
-                        md_bg_color: c(theme.LEAF_DARK)
-                        on_release: root.generate("period", "zip")
+                PrimaryButton:
+                    text: "Generar PDF"
+                    on_release: root.generate("period")
             PaperCard:
                 SectionLabel:
                     text: "3 · FICHA COMPLETA POR VARIEDAD"
@@ -635,31 +626,17 @@
                     icon: "fruit-cherries"
                     text: "Seleccionar variedad"
                     on_release: root.pick_variety(self)
-                MDBoxLayout:
-                    adaptive_height: True
-                    spacing: dp(8)
-                    PrimaryButton:
-                        text: "HTML"
-                        on_release: root.generate("variety", "html")
-                    PrimaryButton:
-                        text: "ZIP portátil"
-                        md_bg_color: c(theme.LEAF_DARK)
-                        on_release: root.generate("variety", "zip")
+                PrimaryButton:
+                    text: "Generar PDF"
+                    on_release: root.generate("variety")
             PaperCard:
                 SectionLabel:
                     text: "4 · MATRIZ COMPARATIVA GLOBAL"
                 Muted:
                     text: "Heatmap BBCH, precocidad relativa, hitos fenológicos y galería paralela de la temporada."
-                MDBoxLayout:
-                    adaptive_height: True
-                    spacing: dp(8)
-                    PrimaryButton:
-                        text: "HTML"
-                        on_release: root.generate("matrix", "html")
-                    PrimaryButton:
-                        text: "ZIP portátil"
-                        md_bg_color: c(theme.LEAF_DARK)
-                        on_release: root.generate("matrix", "zip")
+                PrimaryButton:
+                    text: "Generar PDF"
+                    on_release: root.generate("matrix")
             SectionLabel:
                 text: "INFORMES GENERADOS"
             MDBoxLayout:
@@ -885,7 +862,7 @@
                     on_release: root.import_reports()
                 Muted:
                     id: backup_text
-                    text: "La copia completa se guarda en Descargas › PhenoRubus. «Restaurar» acepta esa copia o el archivo .sqlite3 de «Respaldar base de datos» de versiones anteriores, y recupera las fotos tomadas con la app desde «Imágenes de Fenología» (o «FenoRubus» en las primeras versiones). Los informes semanales (.html o .zip) completan lo que falte."
+                    text: "La copia completa se guarda en Descargas › PhenoRubus. «Restaurar» acepta esa copia o el archivo .sqlite3 de «Respaldar base de datos» de versiones anteriores, y recupera las fotos tomadas con la app desde «Imágenes de Fenología» (o «FenoRubus» en las primeras versiones). Los informes semanales (PDF, o .html/.zip de versiones anteriores) completan lo que falte."
 
 <StatTile@GlassCard>:
     orientation: "vertical"
@@ -1476,7 +1453,7 @@
                     on_release: root.save()
                 GhostButton:
                     icon: "file-chart-outline"
-                    text: "Generar ficha HTML de la variedad"
+                    text: "Generar ficha de la variedad (PDF)"
                     on_release: root.report()
 
 <CustomFieldRow>:

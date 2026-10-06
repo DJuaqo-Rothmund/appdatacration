@@ -26,7 +26,6 @@ import datetime as _dt
 import io
 import json
 import os
-import zipfile
 from dataclasses import dataclass
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -62,9 +61,9 @@ def seq_color(code: int | None) -> tuple[str, str]:
 # ===========================================================================
 class ImageStore:
     """
-    Convierte fotos a data-URI (modo html), archivos relativos (modo zip) o
-    miniaturas locales en caché referenciadas por file:// (modo preview: rápido
-    y con poca memoria, para la vista previa dentro de la app).
+    Convierte fotos a data-URI (modo html), deja la ruta del archivo (modo pdf: el
+    PDF las reduce al incrustarlas) o miniaturas locales en caché referenciadas por
+    file:// (modo preview: rápido y con poca memoria, para la vista previa en la app).
     """
 
     def __init__(self, package: str, max_side: int, quality: int, cache_dir: str | None = None):
@@ -91,8 +90,8 @@ class ImageStore:
         key = (path, side)
         if key in self._cache:
             return self._cache[key]
-        if self.package == "zip":
-            side = max(side, 1600)
+        if self.package == "pdf":
+            return path
         if self.package == "preview":
             uri = self._preview_file(path, min(side, 720))
             self._cache[key] = uri
@@ -101,12 +100,7 @@ class ImageStore:
             data = self._encode(path, side)
         except Exception:
             return None
-        if self.package == "zip":
-            name = f"img/{len(self.files) + 1:04d}_{slugify(os.path.splitext(os.path.basename(path))[0])}.jpg"
-            self.files[name] = data
-            uri = name
-        else:
-            uri = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+        uri = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
         self._cache[key] = uri
         return uri
 
@@ -235,6 +229,9 @@ def compare_chart(series: list[dict], week_min: int, week_max: int,
     return {"svg": "".join(out), "chips": [{"id": s_["id"], "name": s_["name"],
                                             "slot": sel.index(s_["id"]) + 1 if s_["id"] in sel else 0}
                                            for s_ in series],
+            # Datos sin dibujar: el informe PDF traza su propio gráfico con ellos.
+            "raw": {"series": series, "sel": sel, "wmin": week_min, "wmax": week_max,
+                    "labels": {n: wlabel(n) for n in range(week_min, week_max + 1)}},
             "json": json.dumps({"series": data, "wmin": week_min, "wmax": week_max,
                                 "labels": {str(n): wlabel(n) for n in range(week_min, week_max + 1)},
                                 "pl": pl, "w": w, "vw": W}, ensure_ascii=False).replace("</", "<\\/")}
@@ -299,9 +296,9 @@ class ReportGenerator:
 
     def _render(self, template: str, filename: str, kind: str, title: str,
                 images: ImageStore, package: str, **ctx) -> ReportResult:
-        html = self.env.get_template(template).render(
-            title=title, generated=_dt.datetime.now().strftime("%d-%m-%Y %H:%M"),
-            package=package, **ctx)
+        generated = _dt.datetime.now().strftime("%d-%m-%Y %H:%M")
+        html = "" if package == "pdf" else self.env.get_template(template).render(
+            title=title, generated=generated, package=package, **ctx)
         base = os.path.join(self.out_dir, filename)
         if package == "preview":
             # Vista previa: no se guarda como informe ni se registra en la bitácora.
@@ -309,12 +306,13 @@ class ReportGenerator:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(html)
             return ReportResult(path, title, kind, max(1, len(html.encode()) // 1024))
-        if package == "zip":
-            path = base + ".zip"
-            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("index.html", html)
-                for name, data in images.files.items():
-                    zf.writestr(name, data, compress_type=zipfile.ZIP_STORED)
+        if package == "pdf":
+            import pdf_report
+            path = base + ".pdf"
+            data = pdf_report.render(template, dict(ctx, title=title, generated=generated),
+                                     self.db.bbch_names(), self._num)
+            with open(path, "wb") as f:
+                f.write(data)
         else:
             path = base + ".html"
             with open(path, "w", encoding="utf-8") as f:
@@ -323,11 +321,19 @@ class ReportGenerator:
         return ReportResult(path, title, kind, max(1, os.path.getsize(path) // 1024))
 
     include_all_photos = False  # True: agrega las fotos no principales como miniaturas
+    # Fotos de los informes: "both" (Full: general + detalle), "detail" o "canopy" (general).
+    # Siempre la foto representativa (principal) de cada tipo.
+    photo_mode = "both"
+    PHOTO_MODES = {"both": "Full (general y detalle)", "detail": "Solo detalle", "canopy": "Solo general"}
+
+    def _kinds(self) -> tuple[str, ...]:
+        return ("canopy", "detail") if self.photo_mode not in ("detail", "canopy") else (self.photo_mode,)
 
     def _extras(self, obs: dict | None, images: ImageStore) -> list[str]:
         if not (self.include_all_photos and obs):
             return []
-        return [src for p in self.db.list_photos(obs["id"]) if not p["is_primary"]
+        return [src for p in self.db.list_photos(obs["id"])
+                if not p["is_primary"] and p["kind"] in self._kinds()
                 for src in [images.src(p["path"], 360)] if src]
 
     def _attachments(self, variety_id: int, week_id: int, images: ImageStore) -> list[dict]:
@@ -366,8 +372,8 @@ class ReportGenerator:
         return out
 
     def _photo_ctx(self, photos: dict, images: ImageStore, max_side: int | None = None) -> dict:
-        return {kind: images.src(photos[kind]["path"], max_side) if kind in photos else None
-                for kind, _ in PHOTO_KINDS}
+        return {kind: images.src(photos[kind]["path"], max_side)
+                if kind in photos and kind in self._kinds() else None for kind, _ in PHOTO_KINDS}
 
     def _obs_ctx(self, obs: dict | None) -> dict:
         if not obs:
@@ -528,6 +534,7 @@ class ReportGenerator:
                 week_means[w["week_number"]] = sum(vals) / len(vals)
         rows = []
         wmin, wmax = weeks[0]["week_number"], weeks[-1]["week_number"]
+        gk = "canopy" if self.photo_mode == "canopy" else "detail"   # galería paralela
         for r in heat:
             pts = [(c["week"]["week_number"], c["code"]) for c in r["cells"] if c["code"] is not None]
             deltas = [code - week_means[wk] for wk, code in pts if wk in week_means]
@@ -541,9 +548,9 @@ class ReportGenerator:
                 obs = self.db.get_observation(r["variety"]["id"], c["week"]["id"])
                 photos = self.db.get_photos(obs["id"]) if obs else {}
                 gallery.append({"week": c["week"], "code": c["code"],
-                                "src": images.src(photos["detail"]["path"]) if "detail" in photos else None})
+                                "src": images.src(photos[gk]["path"]) if gk in photos else None})
             rows.append({"variety": r["variety"], "delta": delta, "hits": hits,
-                         "last": pts[-1][1] if pts else None,
+                         "last": pts[-1][1] if pts else None, "pts": pts,
                          "spark": svg_progress(pts, wmin, max(wmax, wmin + 1), 160, 40, spark=True,
                                                wlabel=self._wlabel(season))
                          if pts else "", "gallery": gallery})
@@ -554,6 +561,7 @@ class ReportGenerator:
             "matrix.html", f"matriz_{season}", "matriz", title, images, package,
             weeks=weeks, heat=heat, rows=rows, compare=self._compare(heat, weeks), ranking=ranking, max_abs=max_abs,
             milestones=MILESTONES,
+            gallery_label="fotos generales" if gk == "canopy" else "fotos de detalle",
             subtitle=f"Avance fenológico relativo · {ph.season_title(season)} · "
                      f"Semanas {ph.week_of_year(weeks[0])}–{ph.week_of_year(weeks[-1])}",
             data_json=json.dumps([{"variedad": r["variety"]["name"],

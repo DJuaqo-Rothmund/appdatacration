@@ -439,36 +439,85 @@ def _image_bytes(src: str, zf, html_name: str) -> bytes | None:
     return None
 
 
+def _pdf_week_report(path: str):
+    """Datos de un informe semanal en PDF (archivo «phenorubus_semanal.json» incrustado)
+    y acceso a sus fotos (imágenes JPEG del PDF, por nombre)."""
+    from pypdf import PdfReader
+    from pdf_report import WEEKLY_DATA
+    try:
+        reader = PdfReader(path)
+        raw = reader.attachments.get(WEEKLY_DATA)
+    except Exception:  # noqa: BLE001 - PDF dañado o de otra aplicación
+        return None, {}
+    if not raw:
+        return None, {}
+    data = json.loads(raw[0])
+    images = {}
+    for page in reader.pages:
+        xobjects = (page.get("/Resources") or {}).get("/XObject") or {}
+        for key, ref in xobjects.items():
+            images.setdefault(str(key).lstrip("/"), ref)
+    return data, images
+
+
+def _parse_sources(db, paths: list[str]):
+    """Informes semanales (HTML, ZIP o PDF) -> [(nombre, semana | None, tarjetas)].
+    Tarjeta: {name, code, notes, photos: {tipo: función que devuelve los bytes}}."""
+    out = []
+    for p in paths:
+        if p.lower().endswith(".pdf"):
+            data, images = _pdf_week_report(p)
+            week, cards = None, []
+            if data and data.get("kind") == "weekly":
+                try:
+                    week = db.week_for_date(_dt.date.fromisocalendar(
+                        int(data["iso_year"]), int(data["iso_week"]), 7))
+                except (KeyError, ValueError):
+                    week = None
+                for c in data.get("cards", []):
+                    photos = {k: (lambda ref=images.get(n): ref.get_object().get_data() if ref else None)
+                              for k, n in (c.get("photos") or {}).items()}
+                    cards.append({"name": c.get("name", ""), "code": c.get("bbch"),
+                                  "notes": c.get("notes") or "", "photos": photos})
+            out.append((os.path.basename(p), week if cards else None, cards))
+            continue
+        for name, html, zf in _report_sources(p):
+            parser = _WeeklyParser()
+            parser.feed(html)
+            wk = re.search(r"Semana\s+(\d+)", parser.h1)
+            year = re.search(r"año\s+(\d{4})", parser.h1, flags=re.I)      # «Semana 37, año 2026»
+            season = re.search(r"Temporada\s+(\d{4})", parser.sub)         # formato anterior
+            week = None
+            if "semanal" in parser.h1.lower() and wk and parser.cards:
+                if year:
+                    try:   # domingo de esa semana ISO: siempre cae dentro de la semana de muestreo
+                        week = db.week_for_date(_dt.date.fromisocalendar(int(year[1]), int(wk[1]), 7))
+                    except ValueError:
+                        week = None
+                elif season:
+                    week = db.ensure_week(int(season[1]), int(wk[1]))
+            cards = [{"name": c["name"], "code": ph.parse_bbch_code(c["chip"]), "notes": c["notes"],
+                      "photos": {k: (lambda src=src, zf=zf, name=name: _image_bytes(src, zf, name))
+                                 for k, src in c["photos"].items()}} for c in parser.cards]
+            out.append((name, week, cards))
+    return out
+
+
 def import_reports(db, paths: list[str], progress=None) -> ReportImport:
-    """Completa registros a partir de informes semanales (no sobrescribe lo existente)."""
+    """Completa registros a partir de informes semanales (PDF, o HTML/ZIP de versiones
+    anteriores). No sobrescribe lo existente."""
     res = ReportImport()
     varieties = {v["name"].lower(): v for v in db.list_varieties(include_archived=True)}
-    sources = []
-    for p in paths:
-        sources += _report_sources(p)
+    sources = _parse_sources(db, paths)
     tmp = os.path.join(data_subdir("tmp", "restore"), "informe.jpg")
-    for i, (name, html, zf) in enumerate(sources):
+    for i, (name, week, cards) in enumerate(sources):
         if progress:
             progress(i, len(sources))
-        parser = _WeeklyParser()
-        parser.feed(html)
-        wk = re.search(r"Semana\s+(\d+)", parser.h1)
-        year = re.search(r"año\s+(\d{4})", parser.h1, flags=re.I)      # «Semana 37, año 2026»
-        season = re.search(r"Temporada\s+(\d{4})", parser.sub)         # formato anterior
-        week = None
-        if "semanal" in parser.h1.lower() and wk and parser.cards:
-            if year:
-                try:   # domingo de esa semana ISO: siempre cae dentro de la semana de muestreo
-                    week = db.week_for_date(_dt.date.fromisocalendar(int(year[1]), int(wk[1]), 7))
-                except ValueError:
-                    week = None
-            elif season:
-                week = db.ensure_week(int(season[1]), int(wk[1]))
         if week is None:
             res.skipped.append(f"{name}: no es un informe semanal")
             continue
         res.reports += 1
-        for card in parser.cards:
+        for card in cards:
             vname = card["name"].strip()
             if not vname:
                 continue
@@ -478,7 +527,7 @@ def import_reports(db, paths: list[str], progress=None) -> ReportImport:
                 varieties[vname.lower()] = v
             obs = db.get_or_create_observation(v["id"], week["id"])
             fields = {}
-            code = ph.parse_bbch_code(card["chip"])
+            code = card["code"]
             if code is not None and obs["bbch_code"] is None:
                 fields.update(bbch_code=code, bbch_label=ph.bbch_label(code, db.bbch_names()))
                 res.bbch += 1
@@ -489,10 +538,13 @@ def import_reports(db, paths: list[str], progress=None) -> ReportImport:
                 db.update_observation(obs["id"], **fields)
             have = db.get_photos(obs["id"])
             missing_file = {k: p for k, p in have.items() if not os.path.exists(p["path"])}
-            for kind, src in card["photos"].items():
+            for kind, read in card["photos"].items():
                 if kind in have and kind not in missing_file:
                     continue
-                data = _image_bytes(src, zf, name)
+                try:
+                    data = read()
+                except Exception:  # noqa: BLE001
+                    data = None
                 if not data:
                     continue
                 with open(tmp, "wb") as f:

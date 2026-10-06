@@ -50,7 +50,8 @@ from ui.screens import (AILabScreen, HomeScreen, MeasureScreen, ObservationScree
                         PinForm, SettingsScreen, SplashScreen, VarietyScreen, form_dialog)
 
 MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pdf": "application/pdf"}
 
 
 class FenoRubusApp(MDApp):
@@ -103,6 +104,13 @@ class FenoRubusApp(MDApp):
     def reports(self):
         from reporter import ReportGenerator  # Jinja2: solo al generar informes
         return ReportGenerator(self.db, data_subdir("reports"))
+
+    def configured_reports(self):
+        """Generador de informes con las preferencias del teléfono (fotos a incluir)."""
+        r = self.reports
+        r.include_all_photos = bool(self.db.get_setting("report_all_photos", False))
+        r.photo_mode = self.db.get_setting("report_photo_mode", "both")
+        return r
 
     @cached_property
     def drive(self):
@@ -345,7 +353,7 @@ class FenoRubusApp(MDApp):
         from ui.screens import pick_dialog
         size_mb = os.path.getsize(path) / 1e6
         heavy = size_mb > 20
-        mail_note = (f"{size_mb:.0f} MB: puede superar el límite de adjuntos (use ZIP)" if heavy
+        mail_note = (f"{size_mb:.0f} MB: puede superar el límite de adjuntos del correo" if heavy
                      else "Gmail, Outlook u otra app de correo")
         options = [
             ("WhatsApp", "Enviar como documento", lambda: self.share_file(path, target="whatsapp")),
@@ -354,7 +362,8 @@ class FenoRubusApp(MDApp):
             ("Guardar en Google Drive", "Carpeta de la semana en «PhenoRubus · Imágenes de Fenología»"
              if self.db.get_setting("drive_enabled", False) else "Primero conecte Drive en Ajustes",
              lambda: self.save_to_drive(path)),
-            ("Ver informe", "Abrir en el navegador", lambda: self.open_file(path)),
+            ("Ver informe", "Abrir en el lector de PDF" if path.endswith(".pdf") else "Abrir en el navegador",
+             lambda: self.open_file(path)),
             ("Otras apps…", "Drive, Telegram, Bluetooth…", lambda: self.share_file(path)),
         ]
         if not viewable:
