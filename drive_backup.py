@@ -391,14 +391,15 @@ class DriveBackup:
         self._set_message(message)
 
     def diagnostics(self) -> list[str]:
-        return list(reversed(self.db.get_setting("drive_log") or []))
+        """Archivos que no se pudieron subir (con su motivo) + historial reciente."""
+        return self.failed_items() + list(reversed(self.db.get_setting("drive_log") or []))
 
     @property
     def available(self) -> bool:
         return self.authorizer is not None
 
     def status(self) -> dict:
-        counts = {r["status"]: r["n"] for r in self.db.query(
+        counts = {r["status"]: r["n"] for r in self.db.query(   # «skipped» no cuenta
             "SELECT status, COUNT(*) AS n FROM drive_queue GROUP BY status")}
         st = self.db.get_setting("drive_status") or {}
         return {"enabled": self.enabled, "available": self.available, "wifi_only": self.wifi_only,
@@ -535,8 +536,25 @@ class DriveBackup:
         return dest
 
     def retry_errors(self) -> None:
+        self._skip_missing()
         self.db.execute("UPDATE drive_queue SET status='pending', attempts=0 WHERE status='error'")
         self.flush_async()
+
+    def _skip_missing(self) -> int:
+        """Entradas con error cuyo archivo ya no existe (foto borrada o reemplazada): se
+        omiten para que no queden «pegadas» en 181 de 182."""
+        n = 0
+        for r in self.db.query("SELECT id, path FROM drive_queue WHERE status='error'"):
+            if not os.path.exists(r["path"] or ""):
+                self.db.execute("UPDATE drive_queue SET status='skipped', error=? WHERE id=?",
+                                ("El archivo ya no existe en el teléfono", r["id"]))
+                n += 1
+        return n
+
+    def failed_items(self) -> list[str]:
+        return [f"✗ {os.path.basename(r['path'] or r['name'])}: {r['error'] or 'sin detalle'}"
+                for r in self.db.query("SELECT path, name, error FROM drive_queue "
+                                       "WHERE status='error' ORDER BY id LIMIT 20")]
 
     # ------------------------------------------------------------ conexión
     def connect(self, callback=None, choose: bool = True) -> None:
@@ -769,6 +787,7 @@ class DriveBackup:
             if self.wifi_only and self.metered():
                 raise Offline("Esperando Wi-Fi (datos móviles desactivados para el respaldo)")
             self._sync_account_queue()
+            self._skip_missing()
             # Primero mover lo de versiones anteriores (rápido: unas pocas carpetas)…
             self.relocate_legacy()  # lo subido antes de los ensayos -> «I+D/Nuevas variedades»
             while True:
@@ -782,8 +801,10 @@ class DriveBackup:
                     if i == 1 or i % 5 == 0:
                         self._set_message(f"Subiendo {i} de {len(rows)}…")
                     if not os.path.exists(r["path"]):
-                        self.db.execute("UPDATE drive_queue SET status='error', error=? WHERE id=?",
+                        # Foto borrada o reemplazada en la app: no hay nada que subir.
+                        self.db.execute("UPDATE drive_queue SET status='skipped', error=? WHERE id=?",
                                         ("El archivo ya no existe en el teléfono", r["id"]))
+                        self.log(f"Omitida (ya no está en el teléfono): {os.path.basename(r['path'])}")
                         continue
                     try:
                         # Fotos: la carpeta se calcula al subir (semana actual del registro,

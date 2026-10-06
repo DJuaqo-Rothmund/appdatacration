@@ -1025,6 +1025,9 @@ class Database:
 
     def delete_photo(self, photo_id: int) -> None:
         p = self.query_one("SELECT * FROM photos WHERE id=?", (photo_id,))
+        # Si aún no se había subido a Drive, ya no hay nada que subir.
+        self.execute("UPDATE drive_queue SET status='skipped', error='Foto eliminada en la app' "
+                     "WHERE photo_id=? AND status IN ('pending', 'error')", (photo_id,))
         self.execute("DELETE FROM photos WHERE id=?", (photo_id,))
         if p and p["is_primary"]:  # promover la siguiente como principal
             nxt = self.query_one("SELECT id FROM photos WHERE observation_id=? AND kind=? "

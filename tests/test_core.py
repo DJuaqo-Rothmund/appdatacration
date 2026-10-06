@@ -1243,3 +1243,21 @@ def test_predio_units_named_by_irrigation_and_sector(tmp_path):
     assert v["name"] == "Equipo de riego 1, sector 5" and v["cultivar"] == "Tulameen"
     db.close()
     wss.close()
+
+
+def test_drive_missing_files_do_not_block_progress(db, tmp_path):
+    """Una foto borrada o reemplazada no deja la subida «pegada» en 181 de 182."""
+    from drive_backup import DriveBackup
+    drive = DriveBackup(db, authorizer=object(), transport=lambda *a: (200, b"{}"), metered=lambda: False)
+    ok = tmp_path / "ok.jpg"
+    ok.write_bytes(b"x")
+    db.execute("INSERT INTO drive_queue(path, name, status, created_at) VALUES (?, 'ok.jpg', 'done', '2026')",
+               (str(ok),))
+    db.execute("INSERT INTO drive_queue(path, name, status, error, created_at) "
+               "VALUES ('/no/existe.jpg', 'existe.jpg', 'error', 'El archivo ya no existe', '2026')")
+    st = drive.status()
+    assert (st["done"], st["errors"]) == (1, 1)
+    assert any("existe.jpg" in line for line in drive.diagnostics())
+    assert drive._skip_missing() == 1
+    st = drive.status()
+    assert (st["done"], st["errors"], st["pending"]) == (1, 0, 0)    # 1 de 1: completo
