@@ -953,3 +953,101 @@ def test_pdf_reports_all_kinds_and_photo_mode(db, tmp_path):
     import json
     cards = [c for c in json.loads(data)["cards"] if c["photos"]]
     assert len(cards) == 2 and all(set(c["photos"]) == {"canopy"} for c in cards)
+
+
+def test_workspaces_migration_isolation_and_backup(tmp_path):
+    """Al actualizar: lo existente pasa a I+D › Nuevas variedades (NV), se crean los
+    predios AM y LE, la IA y los ajustes del teléfono quedan en la base común, cada
+    ensayo está aislado y el respaldo completo devuelve todo."""
+    import json
+    from data_transfer import full_backup, restore
+    from drive_backup import DriveBackup
+    from photo_rename import migrate_local
+    from workspaces import Workspaces, suggest_code
+    data = tmp_path / "datos"
+    data.mkdir()
+    # --- teléfono con la versión anterior: una sola base con datos, IA y Drive conectado
+    old = Database(str(data / "fenorubus.sqlite3"))
+    week = old.current_week(dt.date(2026, 9, 30))
+    v = old.list_varieties()[0]
+    obs = old.get_or_create_observation(v["id"], week["id"])
+    photo = synthetic_photo(40, "detail", str(data / "20260928-C11D.jpg"), 1)
+    pid = old.add_photo(obs["id"], "detail", photo)
+    clf = PhenologyClassifier(old, HandcraftedExtractor())
+    clf.add_reference(photo, 19, photo_id=pid)
+    old.set_setting("drive_enabled", True)
+    old.set_setting("report_photo_mode", "detail")
+    n_var = len(old.list_varieties())
+    old.close()
+
+    wss = Workspaces(str(data))
+    assert [(w["code"], w["name"], w["profile"]) for w in wss.list()] == [
+        ("NV", "Nuevas variedades", "id"), ("AM", "El Amanecer", "predio"), ("LE", "La Esperanza 2", "predio")]
+    assert wss.last()["code"] == "NV"
+    nv = wss.open(wss.by_code("NV"))
+    am = wss.open(wss.by_code("AM"))
+    assert len(nv.list_varieties()) == n_var and am.list_varieties() == []      # aislados
+    assert nv.get_setting("drive_enabled") is True and am.get_setting("drive_enabled") is True
+    assert am.get_setting("report_photo_mode") == "detail"                       # ajustes del teléfono
+    assert nv.reference_counts() == {19: 1} == am.reference_counts()              # IA compartida
+    assert nv.list_detail_photos()[0]["in_reference"] == 1
+    am.set_setting("season_start:2026", "2026-09-01")                            # ajuste del ensayo
+    assert nv.get_setting("season_start:2026") is None
+
+    # --- código del ensayo en los nombres de foto (las existentes se renombran)
+    assert ph.photo_basename(v, "2026-09-28", "canopy", trial="AM").startswith("20260928-AM-")
+    assert migrate_local(nv)["renamed"] == 1
+    new_path = nv.query_one("SELECT path FROM photos")["path"]
+    assert os.path.basename(new_path) == "20260928-NV-C11D.jpg" and os.path.exists(new_path)
+    assert nv.list_references()[0]["image_path"] == new_path
+    assert migrate_local(nv)["renamed"] == 0
+
+    # --- nuevos ensayos: validaciones y código sugerido
+    assert suggest_code("Fertilización nitrogenada", wss.codes()) == "FN"
+    with pytest.raises(ValueError):
+        wss.create("id", "variedades", "Otro", "NV")
+    fe = wss.create("id", "tratamientos", "Fertilización", "FE")
+    assert os.path.basename(wss.path(fe)) == "FE.sqlite3"
+
+    # --- Drive: carpeta por ensayo y lo antiguo se mueve a la carpeta de NV
+    assert DriveBackup(am).week_path("2026-09-28") == "Predio/El Amanecer/Año 2026/Semana 40 · 28-09-2026"
+    calls = []
+
+    def transport(method, url, headers, body):
+        calls.append((method, url))
+        if method == "GET" and "in+parents" in url and "Nuevas" not in url and "I%2BD" not in url:
+            if "%27root%27" in url or "root" not in url:
+                pass
+            return 200, json.dumps({"files": [{"id": "y26", "name": "Año 2026"},
+                                              {"id": "bk", "name": "Respaldos"},
+                                              {"id": "x", "name": "I+D"}]}).encode()
+        if method == "GET":
+            return 200, b'{"files": []}'
+        return 200, json.dumps({"id": f"n{len(calls)}"}).encode()
+
+    class Auth:
+        def get_token(self, interactive):
+            return "t"
+
+    drive = DriveBackup(nv, authorizer=Auth(), transport=transport, metered=lambda: False)
+    assert drive.relocate_legacy() == 2
+    moved = [u for m, u in calls if m == "PATCH"]
+    assert len(moved) == 2 and all("removeParents" in u for u in moved)
+    assert drive.relocate_legacy() == 0                                           # una sola vez
+
+    # --- informes con el ensayo en el subtítulo y su código en el nombre
+    rep = ReportGenerator(nv, str(tmp_path / "out"))
+    r = rep.weekly(week["id"])
+    assert os.path.basename(r.path).startswith("semanal_NV_2026_S40")
+    assert "I+D · Nuevas variedades" in open(r.path, encoding="utf-8").read()
+
+    # --- respaldo completo de todo el teléfono y restauración
+    zpath = full_backup(nv, str(tmp_path), workspaces=wss)
+    os.remove(new_path)
+    nv.execute("DELETE FROM observations")
+    res = restore(nv, zpath, workspaces=wss)
+    assert res.photos_restored >= 1 and nv.query_one("SELECT COUNT(*) AS n FROM observations")["n"] == 1
+    assert os.path.exists(nv.query_one("SELECT path FROM photos")["path"])
+    assert nv.reference_counts() == {19: 1}
+    assert {w["code"] for w in wss.list()} >= {"NV", "AM", "LE", "FE"}
+    wss.close()

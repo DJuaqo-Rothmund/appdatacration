@@ -400,7 +400,7 @@ class PhenologyClassifier:
             path = r["image_path"]
             if path and os.path.exists(path):
                 emb = self.extractor.extract_path(path)
-                self.db.execute(
+                self.db.ai_db.execute(
                     "UPDATE ai_references SET embedding=?, dim=?, extractor=? WHERE id=?",
                     (emb.tobytes(), int(emb.size), self.extractor.name, r["id"]))
                 done += 1

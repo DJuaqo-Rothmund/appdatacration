@@ -404,7 +404,7 @@ class AndroidMedia:
         chooser = self.Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
         self.activity.startActivity(chooser)
 
-    def rename_public_legacy(self) -> tuple[int, int]:
+    def rename_public_legacy(self, rename=None) -> tuple[int, int]:
         """Fotos de «Imágenes de Fenología» con nombre antiguo (ddmmaaaa-…) -> aaaammdd-….
         Solo puede renombrar las que creó la app (tras reinstalarla, Android lo impide)."""
         from jnius import autoclass  # type: ignore
@@ -416,7 +416,7 @@ class AndroidMedia:
                 Environment.DIRECTORY_PICTURES).getAbsolutePath(), PUBLIC_PHOTO_DIR)
             done = []
             for name in os.listdir(folder) if os.path.isdir(folder) else []:
-                nn = new_name(name)
+                nn = (rename or new_name)(name)
                 if nn and not os.path.exists(os.path.join(folder, nn)):
                     try:
                         os.rename(os.path.join(folder, name), os.path.join(folder, nn))
@@ -443,7 +443,7 @@ class AndroidMedia:
                 cursor.close()
         taken = {name for _id, name in items}
         for media_id, name in items:
-            nn = new_name(name)
+            nn = (rename or new_name)(name)
             if not nn or nn in taken:
                 continue
             values = self.ContentValues()
@@ -642,12 +642,12 @@ class DesktopMedia:
     def save_public(self, path: str, mime: str) -> str:
         return self.export_to_downloads(path, mime)
 
-    def rename_public_legacy(self) -> tuple[int, int]:
+    def rename_public_legacy(self, rename=None) -> tuple[int, int]:
         from photo_rename import new_name
         folder = os.path.join(os.path.expanduser("~"), "Pictures", PUBLIC_PHOTO_DIR)
         ok = 0
         for name in os.listdir(folder) if os.path.isdir(folder) else []:
-            nn = new_name(name)
+            nn = (rename or new_name)(name)
             if nn and not os.path.exists(os.path.join(folder, nn)):
                 os.rename(os.path.join(folder, name), os.path.join(folder, nn))
                 ok += 1

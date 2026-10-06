@@ -172,7 +172,8 @@ def export_measures(db, measure_ids: list[int], season: int | None = None,
         raise ValueError("No hay mediciones para exportar.")
     dest_dir = dest_dir or data_subdir("reports")
     stem = slugify(measures[0]["name"]) if len(measures) == 1 else "mediciones"
-    path = os.path.join(dest_dir, f"{stem}_{season or 'todas'}_{_dt.datetime.now():%Y%m%d_%H%M}.xlsx")
+    code = f"{db.code}_" if getattr(db, "code", "") else ""
+    path = os.path.join(dest_dir, f"{stem}_{code}{season or 'todas'}_{_dt.datetime.now():%Y%m%d_%H%M}.xlsx")
     write_xlsx(path, [(m["name"], measure_rows(db, m, season)) for m in measures])
     db.log("export", "measures", None, os.path.basename(path))
     return path

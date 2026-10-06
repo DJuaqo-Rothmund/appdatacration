@@ -43,11 +43,12 @@ from ui import theme  # noqa: E402
 theme.install_palette()  # antes de cargar widgets KivyMD con color
 
 from android_bridge import create_media, make_thumbnail, request_runtime_permissions  # noqa: E402
-from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager  # noqa: E402
-from platform_utils import data_subdir, resource_path  # noqa: E402
+from platform_utils import data_subdir, get_data_dir, resource_path  # noqa: E402
 from ui.screens import (AILabScreen, HomeScreen, MeasureScreen, ObservationScreen,  # noqa: E402
-                        PinForm, SettingsScreen, SplashScreen, VarietyScreen, form_dialog)
+                        PinForm, SettingsScreen, SplashScreen, VarietyScreen, WorkspacesScreen,
+                        form_dialog)
+from workspaces import Workspaces  # noqa: E402
 
 MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -65,7 +66,11 @@ class FenoRubusApp(MDApp):
         theme.apply(self.theme_cls)
         if platform not in ("android", "ios"):
             Window.size = (412, 860)
-        self.db = Database(default_db_path())
+        # Ensayos y predios: cada uno con su base; la común guarda IA, escala y ajustes.
+        self.workspaces = Workspaces(get_data_dir())
+        self._dbs: dict = {}
+        self.workspace = self.workspaces.last()
+        self.db = self.open_db(self.workspace)
         self.reminders = ReminderManager(self.db)
         self.media = create_media(data_subdir("tmp"), self._desktop_file_chooser)
         self.week = self.db.current_week()
@@ -139,6 +144,57 @@ class FenoRubusApp(MDApp):
         self.go("measure")
 
     @property
+    def workspaces_screen(self):
+        return self._screen(WorkspacesScreen, "workspaces")
+
+    def open_db(self, ws: dict):
+        """Base del ensayo/predio (se reutiliza la conexión si ya estaba abierta)."""
+        db = self._dbs.get(ws["id"])
+        if db is None:
+            db = self._dbs[ws["id"]] = self.workspaces.open(ws)
+        db.workspace = dict(ws)
+        return db
+
+    def open_workspaces(self):
+        self.workspaces_screen
+        self.go("workspaces")
+
+    def workspace_renamed(self, ws_id: int):
+        ws = self.workspaces.get(ws_id)
+        if ws_id in self._dbs:
+            self._dbs[ws_id].workspace = dict(ws)
+        if self.workspace and self.workspace["id"] == ws_id:
+            self.workspace = ws
+            if self.home is not None:
+                self.home.update_banner()
+
+    def open_workspace(self, ws_id: int):
+        """Cambia de ensayo o predio: todas las pantallas se rehacen con sus datos."""
+        ws = self.workspaces.get(ws_id)
+        if ws is None:
+            return
+        self.workspace = ws
+        self.workspaces.remember(ws)
+        self.db = self.open_db(ws)
+        self.reminders = ReminderManager(self.db)
+        for name in ("classifier", "reports", "drive", "pin"):
+            self.__dict__.pop(name, None)
+        self.week = self.db.current_week()
+        self.season = self.week["season"]
+        for name in list(self.sm.screen_names):
+            if name not in ("workspaces", "splash"):
+                self.sm.remove_widget(self.sm.get_screen(name))
+        self._history = []
+        self.home = HomeScreen(name="home")
+        self.sm.add_widget(self.home)
+        self.home.refresh_current()
+        self.sm.current = "home"
+        self.toast(f"{Workspaces.title(ws)} ({ws['code']})")
+        self.workers.submit(self._rename_photos)
+        if self.db.get_setting("drive_enabled", False):
+            Clock.schedule_once(lambda *_: self.workers.submit(self._drive_daily), 3)
+
+    @property
     def ailab(self):
         return self._screen(AILabScreen, "ailab")
 
@@ -193,14 +249,18 @@ class FenoRubusApp(MDApp):
     def _rename_public(self, local: int):
         """Galería («Imágenes de Fenología»): en el hilo principal (Java), una sola vez."""
         public = 0
-        if not self.db.get_setting("public_names_aaaammdd", False):
+        if not self.db.get_setting("public_names_v34", False):
+            # Fotos de versiones anteriores (todas de «Nuevas variedades»): fecha aaaammdd
+            # y código NV. Las que ya tienen el código de algún ensayo no se tocan.
+            from photo_rename import new_name
+            known = self.workspaces.codes()
             try:
-                public, _failed = self.media.rename_public_legacy()
-                self.db.set_setting("public_names_aaaammdd", True)
+                public, _failed = self.media.rename_public_legacy(lambda n: new_name(n, "NV", known))
+                self.db.set_setting("public_names_v34", True)
             except Exception as exc:  # noqa: BLE001
                 print("rename public:", exc)
         if local or public:
-            self.toast(f"Fotos renombradas al formato año-mes-día: {max(local, public)}")
+            self.toast(f"Fotos renombradas (fecha año-mes-día y código del ensayo): {max(local, public)}")
         if self.db.get_setting("drive_enabled", False):
             self.drive.flush_async()   # renombra también las ya subidas a Drive
 
@@ -427,16 +487,13 @@ class FenoRubusApp(MDApp):
             print("drive daily backup:", exc)
 
     def reload_data(self):
-        """Tras restaurar un respaldo: descarta cachés y vuelve a leer todo."""
-        for name in ("classifier", "reports"):
-            self.__dict__.pop(name, None)
-        self.week = self.db.current_week()
-        self.season = self.week["season"]
-        for name in ("observation", "variety", "ailab"):
-            if self.sm.has_screen(name):
-                self.sm.remove_widget(self.sm.get_screen(name))
+        """Tras restaurar un respaldo: descarta cachés y vuelve a leer todo (el registro de
+        ensayos también pudo cambiar)."""
+        ws = self.workspaces.get(self.workspace["id"]) if self.workspace else None
+        if ws is None or ws["archived"]:
+            ws = self.workspaces.last()
+        self.open_workspace(ws["id"])
         self.reminders.apply()
-        self.refresh_home()
 
     def backup_photo(self, photo_id: int, path: str) -> None:
         """Encola la foto para respaldo en Google Drive (si está activado)."""
@@ -448,9 +505,8 @@ class FenoRubusApp(MDApp):
         """Fotos adjuntas o de mediciones → carpeta de la semana en Drive («…/Adjuntas», «…/<medición>»)."""
         if not self.db.get_setting("drive_enabled", False):
             return
-        from drive_backup import DriveBackup
         safe = folder.replace("/", "-").strip() or "Otras"
-        self.drive.enqueue(None, path, remote=f"{DriveBackup.week_folder(start_date)}/{safe}/"
+        self.drive.enqueue(None, path, remote=f"{self.drive.week_path(start_date)}/{safe}/"
                                               f"{os.path.basename(path)}")
 
     def _check_reminder(self):

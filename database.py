@@ -248,8 +248,19 @@ def _now() -> str:
 class Database:
     """Acceso thread-safe (una conexión + lock) a la base SQLite local."""
 
-    def __init__(self, path: str, seed: bool = True):
+    # Ajustes que valen para todo el teléfono (no para un ensayo): viven en la base
+    # común cuando la hay (cuenta de Drive, PIN, recordatorio, informes…).
+    SHARED_SETTING_PREFIXES = ("drive_", "report_", "ai_pin", "ai_auto_learn", "reminder",
+                               "public_names", "last_workspace", "workspaces_")
+
+    def __init__(self, path: str, seed: bool = True, shared: "Database | None" = None,
+                 code: str = "", workspace: dict | None = None):
+        """shared: base común del teléfono (registro de ensayos, memoria de la IA, escala
+        BBCH, documentos y ajustes globales). code / workspace: ensayo o predio de esta base."""
         self.path = path
+        self.shared = shared
+        self.code = code
+        self.workspace = workspace or {}
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self._lock = threading.RLock()
         self.conn = sqlite3.connect(path, check_same_thread=False)
@@ -299,6 +310,7 @@ class Database:
                          ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
         "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
         "variety_attachments": [("week_id", "INTEGER")],                # foto adjunta semanal
+        "ai_references": [("workspace", "TEXT")],                       # ensayo de la foto
     }
 
     def _add_missing_columns(self) -> None:
@@ -364,7 +376,19 @@ class Database:
         return self.query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
 
     # ------------------------------------------------------------ settings
+    def _settings_db(self, key: str) -> "Database":
+        if self.shared is not None and key.startswith(self.SHARED_SETTING_PREFIXES):
+            return self.shared
+        return self
+
+    @property
+    def ai_db(self) -> "Database":
+        """Base donde vive la memoria de la IA (común a todos los ensayos si la hay)."""
+        return self.shared if self.shared is not None else self
+
     def get_setting(self, key: str, default: Any = None) -> Any:
+        if self._settings_db(key) is not self:
+            return self.shared.get_setting(key, default)
         row = self.query_one("SELECT value FROM settings WHERE key=?", (key,))
         if row is None:
             return default
@@ -374,6 +398,9 @@ class Database:
             return row["value"]
 
     def set_setting(self, key: str, value: Any) -> None:
+        if self._settings_db(key) is not self:
+            self.shared.set_setting(key, value)
+            return
         self.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
                      (key, json.dumps(value)))
 
@@ -856,7 +883,7 @@ class Database:
         """Fotos de detalle con su BBCH asignado (para etiquetado en la calibración)."""
         sql = ("SELECT p.*, o.bbch_code, o.variety_id, v.name AS variety_name, "
                "w.week_number, w.start_date, w.label AS week_label, w.season, "
-               "(SELECT COUNT(*) FROM ai_references r WHERE r.photo_id = p.id) AS in_reference "
+               "0 AS in_reference "
                "FROM photos p JOIN observations o ON o.id = p.observation_id "
                "JOIN varieties v ON v.id = o.variety_id "
                "JOIN sampling_weeks w ON w.id = o.week_id WHERE p.kind='detail'")
@@ -864,7 +891,11 @@ class Database:
         if season is not None:
             sql += " AND w.season=?"
             params = (season,)
-        return self.query(sql + " ORDER BY w.week_number DESC, v.sort_order", params)
+        rows = self.query(sql + " ORDER BY w.week_number DESC, v.sort_order", params)
+        in_ref = self.referenced_photo_ids()
+        for r in rows:
+            r["in_reference"] = int(r["id"] in in_ref)
+        return rows
 
     # ---------------------------------------------------------- aggregations
     def week_overview(self, week_id: int, include_archived: bool = False) -> list[dict]:
@@ -900,14 +931,14 @@ class Database:
 
     # ------------------------------------------------------------------ BBCH
     def list_bbch(self) -> list[dict]:
-        return self.query("SELECT * FROM bbch_stages ORDER BY code")
+        return self.ai_db.query("SELECT * FROM bbch_stages ORDER BY code")
 
     def bbch_names(self) -> dict[int, str]:
         return {r["code"]: r["label"] for r in self.list_bbch()}
 
     def upsert_bbch(self, code: int, label: str, description: str = "",
                     keywords: str = "", source: str = "user") -> None:
-        self.execute(
+        self.ai_db.execute(
             "INSERT INTO bbch_stages(code, label, description, keywords, source) "
             "VALUES (?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET label=excluded.label, "
             "description=excluded.description, keywords=excluded.keywords, "
@@ -916,48 +947,57 @@ class Database:
     # --------------------------------------------------------- AI references
     def add_reference(self, bbch_code: int, extractor: str, embedding: bytes, dim: int,
                       image_path: str | None = None, photo_id: int | None = None) -> int:
+        """La referencia se guarda en la memoria común; photo_id se refiere a una foto de
+        ESTE ensayo (se distingue por el código del ensayo)."""
+        ai = self.ai_db
         if photo_id is not None:
             # Una foto solo aporta una referencia por extractor (re-etiquetar la reemplaza).
-            self.execute("DELETE FROM ai_references WHERE photo_id=? AND extractor=?",
-                         (photo_id, extractor))
-        cur = self.execute(
+            ai.execute("DELETE FROM ai_references WHERE photo_id=? AND extractor=? "
+                       "AND COALESCE(workspace, '')=?", (photo_id, extractor, self.code))
+        cur = ai.execute(
             "INSERT INTO ai_references(bbch_code, extractor, embedding, dim, image_path, "
-            "photo_id, created_at) VALUES (?,?,?,?,?,?,?)",
-            (int(bbch_code), extractor, embedding, dim, image_path, photo_id, _now()))
+            "photo_id, created_at, workspace) VALUES (?,?,?,?,?,?,?,?)",
+            (int(bbch_code), extractor, embedding, dim, image_path, photo_id, _now(), self.code))
         self.log("create", "ai_reference", cur.lastrowid, f"BBCH {bbch_code}")
         return cur.lastrowid
 
     def list_references(self, extractor: str | None = None) -> list[dict]:
         if extractor:
-            return self.query("SELECT * FROM ai_references WHERE extractor=? ORDER BY id",
-                              (extractor,))
-        return self.query("SELECT * FROM ai_references ORDER BY id")
+            return self.ai_db.query("SELECT * FROM ai_references WHERE extractor=? ORDER BY id",
+                                    (extractor,))
+        return self.ai_db.query("SELECT * FROM ai_references ORDER BY id")
+
+    def referenced_photo_ids(self) -> set[int]:
+        """Fotos de este ensayo que ya están en la memoria de la IA."""
+        return {r["photo_id"] for r in self.ai_db.query(
+            "SELECT photo_id FROM ai_references WHERE photo_id IS NOT NULL "
+            "AND COALESCE(workspace, '')=?", (self.code,))}
 
     def delete_reference(self, ref_id: int) -> None:
-        self.execute("DELETE FROM ai_references WHERE id=?", (ref_id,))
+        self.ai_db.execute("DELETE FROM ai_references WHERE id=?", (ref_id,))
         self.log("delete", "ai_reference", ref_id)
 
     def reference_counts(self) -> dict[int, int]:
-        return {r["bbch_code"]: r["n"] for r in self.query(
+        return {r["bbch_code"]: r["n"] for r in self.ai_db.query(
             "SELECT bbch_code, COUNT(*) AS n FROM ai_references GROUP BY bbch_code")}
 
     # -------------------------------------------------------------- documents
     def add_document(self, title: str, path: str | None, text: str, stages_found: int) -> int:
-        cur = self.execute(
+        cur = self.ai_db.execute(
             "INSERT INTO documents(title, path, text, stages_found, created_at) "
             "VALUES (?,?,?,?,?)", (title, path, text, stages_found, _now()))
         self.log("create", "document", cur.lastrowid, title)
         return cur.lastrowid
 
     def list_documents(self) -> list[dict]:
-        return self.query("SELECT id, title, path, stages_found, created_at, "
-                          "LENGTH(text) AS chars FROM documents ORDER BY id DESC")
+        return self.ai_db.query("SELECT id, title, path, stages_found, created_at, "
+                                "LENGTH(text) AS chars FROM documents ORDER BY id DESC")
 
     def documents_text(self) -> str:
-        return "\n".join(r["text"] for r in self.query("SELECT text FROM documents"))
+        return "\n".join(r["text"] for r in self.ai_db.query("SELECT text FROM documents"))
 
     def delete_document(self, doc_id: int) -> None:
-        self.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        self.ai_db.execute("DELETE FROM documents WHERE id=?", (doc_id,))
         self.log("delete", "document", doc_id)
 
 

@@ -11,12 +11,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database, default_db_path  # noqa: E402
 from notifications import ReminderManager, notify, reminder_text  # noqa: E402
+from platform_utils import get_data_dir  # noqa: E402
+from workspaces import Workspaces  # noqa: E402
 
 
 def main() -> None:
-    db = Database(default_db_path())
+    # El recordatorio es del teléfono (base común); el texto, del último ensayo usado.
+    wss = Workspaces(get_data_dir())
+    db = wss.open(wss.last())
     try:
         manager = ReminderManager(db)
         if manager.config().enabled:
@@ -26,6 +29,7 @@ def main() -> None:
         manager.apply(_dt.datetime.now() + _dt.timedelta(hours=1))
     finally:
         db.close()
+        wss.close()
 
 
 if __name__ == "__main__":

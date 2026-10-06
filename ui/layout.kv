@@ -255,7 +255,11 @@
         TopBar:
             id: bar
             title: "Muestreo semanal"
+            left_action_items: [["view-grid-outline", lambda x: app.open_workspaces(), "Ensayos y predios"]]
             right_action_items: [["creation", lambda x: app.open_ai_lab(), "Entrenador de IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
+        WorkspaceBanner:
+            id: ws_banner
+            on_release: app.open_workspaces()
         ScreenManager:
             id: tabs
             transition: NoTransition()
@@ -420,6 +424,139 @@
                 orientation: "vertical"
                 adaptive_height: True
                 spacing: dp(8)
+
+<WorkspaceBanner>:
+    size_hint_y: None
+    height: dp(36)
+    padding: dp(16), 0, dp(12), 0
+    spacing: dp(8)
+    md_bg_color: c(theme.LEAF_DARK)
+    radius: [0]
+    line_color: 0, 0, 0, 0
+    MDIcon:
+        icon: root.icon
+        size_hint: None, None
+        size: dp(20), dp(20)
+        font_size: "18sp"
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: 1, 1, 1, 1
+    MDLabel:
+        text: root.text
+        font_style: "Body2"
+        bold: True
+        shorten: True
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: 1, 1, 1, 1
+    MDLabel:
+        text: "Cambiar"
+        font_style: "Caption"
+        halign: "right"
+        size_hint_x: None
+        width: dp(60)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: 1, 1, 1, .8
+
+<WorkspacesScreen>:
+    md_bg_color: 0, 0, 0, 0
+    MDBoxLayout:
+        orientation: "vertical"
+        TopBar:
+            id: bar
+            title: "Ensayos y predios"
+            left_action_items: [["arrow-left", lambda x: app.back()]]
+        MDBoxLayout:
+            size_hint_y: None
+            height: dp(56)
+            padding: dp(16), dp(8), dp(16), dp(4)
+            spacing: dp(8)
+            SegButton:
+                text: "I+D"
+                selected: root.profile == "id"
+                on_release: root.set_profile("id")
+            SegButton:
+                text: "Predio"
+                selected: root.profile == "predio"
+                on_release: root.set_profile("predio")
+        MDScrollView:
+            do_scroll_x: False
+            MDBoxLayout:
+                orientation: "vertical"
+                adaptive_height: True
+                padding: dp(16), dp(6), dp(16), dp(24)
+                spacing: dp(10)
+                Muted:
+                    id: hint
+                MDBoxLayout:
+                    id: ws_list
+                    orientation: "vertical"
+                    adaptive_height: True
+                    spacing: dp(8)
+                PrimaryButton:
+                    id: add_btn
+                    text: "+ Nuevo ensayo"
+                    on_release: root.new_item()
+                MDFlatButton:
+                    id: archived_btn
+                    text: "Ver archivados"
+                    pos_hint: {"center_x": .5}
+                    theme_text_color: "Custom"
+                    text_color: c(theme.LEAF_DARK)
+                    on_release: root.toggle_archived()
+
+<WorkspaceRow>:
+    orientation: "horizontal"
+    padding: dp(14), dp(10), dp(4), dp(10)
+    spacing: dp(12)
+    radius: [dp(14)]
+    elevation: 0
+    size_hint_y: None
+    height: dp(78)
+    md_bg_color: c(theme.BERRY_SOFT) if root.current else c(theme.GLASS)
+    line_color: c(theme.BERRY) if root.current else c(theme.GLASS_EDGE)
+    MDLabel:
+        text: root.code
+        bold: True
+        halign: "center"
+        font_style: "Subtitle1"
+        size_hint: None, None
+        size: dp(48), dp(48)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: 1, 1, 1, 1
+        canvas.before:
+            Color:
+                rgba: c(theme.LEAF_DARK) if root.profile == "id" else c(theme.BERRY)
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(12)]
+    MDBoxLayout:
+        orientation: "vertical"
+        adaptive_height: True
+        spacing: dp(2)
+        pos_hint: {"center_y": .5}
+        MDLabel:
+            text: root.title
+            font_style: "Subtitle1"
+            bold: True
+            shorten: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.INK)
+        MDLabel:
+            text: root.subtitle
+            font_style: "Caption"
+            shorten: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.MUTED)
+    MDIconButton:
+        icon: "dots-vertical"
+        pos_hint: {"center_y": .5}
+        on_release: root.screen.item_menu(root.ws)
 
 <VarietyRow>:
     orientation: "horizontal"

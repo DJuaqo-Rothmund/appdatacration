@@ -68,7 +68,7 @@ def export_knowledge(db, dest_dir: str | None = None) -> tuple[str, int]:
                 zf.writestr(item["image"], data, compress_type=zipfile.ZIP_STORED)
             refs.append(item)
         stages = [dict(s) for s in db.list_bbch() if s["source"] != "base"]
-        docs = db.query("SELECT title, text, stages_found, created_at FROM documents ORDER BY id")
+        docs = db.ai_db.query("SELECT title, text, stages_found, created_at FROM documents ORDER BY id")
         zf.writestr("conocimiento.json", json.dumps(
             {"kind": PACKAGE_KIND, "version": 1,
              "created": _dt.datetime.now().isoformat(timespec="seconds"),
@@ -153,7 +153,7 @@ def import_knowledge(db, path: str, classifier=None) -> KnowledgeImport:
             res.stages += 1
 
     known_docs = {(d["title"], len(d["text"] or "")) for d in
-                  db.query("SELECT title, text FROM documents")}
+                  db.ai_db.query("SELECT title, text FROM documents")}
     for d in pkg.get("documents", []):
         if (d["title"], len(d.get("text") or "")) in known_docs:
             continue

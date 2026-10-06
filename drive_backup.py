@@ -370,6 +370,18 @@ class DriveBackup:
         week, year = ph.iso_week(d)
         return f"Año {year}/Semana {week:02d} · {d:%d-%m-%Y}"
 
+    @property
+    def prefix(self) -> str:
+        """Carpeta del ensayo o predio: «I+D/Nuevas variedades/», «Predio/El Amanecer/»."""
+        ws = getattr(self.db, "workspace", None) or {}
+        if not ws:
+            return ""
+        from workspaces import Workspaces
+        return Workspaces.drive_prefix(ws) + "/"
+
+    def week_path(self, start_date: str) -> str:
+        return f"{self.prefix}{self.week_folder(start_date)}"
+
     def _remote_name(self, photo_id: int | None, path: str) -> str:
         """Carpeta de la SEMANA de muestreo de la foto + nombre del archivo."""
         row = None
@@ -380,8 +392,8 @@ class DriveBackup:
                 "JOIN sampling_weeks w ON w.id = o.week_id WHERE p.id = ?", (photo_id,))
         base = os.path.basename(path)
         if row:
-            return f"{self.week_folder(row['start_date'])}/{base}"
-        return base
+            return f"{self.week_path(row['start_date'])}/{base}"
+        return f"{self.prefix}{base}"
 
     def enqueue_report(self, path: str, flush: bool = True) -> str:
         """Sube un informe: los semanales van a la carpeta de su semana; el resto a
@@ -389,7 +401,7 @@ class DriveBackup:
         import re
         base = os.path.basename(path)
         remote = None
-        m = re.match(r"semanal_(\d{4})_S(\d+)", base)          # semanal_2026_S37 (semana del año)
+        m = re.match(r"semanal_(?:[A-Z0-9]{2,4}_)?(\d{4})_S(\d+)", base)   # semanal_NV_2026_S37
         old = re.match(r"semanal_T(\d{4})_S(\d+)", base)       # formato anterior (n.º de muestreo)
         if m:
             try:
@@ -401,16 +413,16 @@ class DriveBackup:
                     "SELECT start_date FROM sampling_weeks WHERE start_date BETWEEN ? AND ? "
                     "ORDER BY start_date LIMIT 1",
                     (start.isoformat(), (start + _dt.timedelta(days=6)).isoformat()))
-                remote = f"{self.week_folder(w['start_date'] if w else start.isoformat())}/{base}"
+                remote = f"{self.week_path(w['start_date'] if w else start.isoformat())}/{base}"
         elif old:
             w = self.db.query_one("SELECT start_date FROM sampling_weeks WHERE season=? AND week_number=?",
                                   (int(old[1]), int(old[2])))
             if w:
-                remote = f"{self.week_folder(w['start_date'])}/{base}"
+                remote = f"{self.week_path(w['start_date'])}/{base}"
         if remote is None:
             t = re.search(r"_T?(\d{4})(?=[_.-]|$)", base)
             year = int(t[1]) if t else _dt.date.today().year
-            remote = f"Año {year}/Informes/{base}"
+            remote = f"{self.prefix}Año {year}/Informes/{base}"
         self.enqueue(None, path, remote=remote, flush=flush)
         return remote
 
@@ -445,7 +457,7 @@ class DriveBackup:
 
     def backup_database(self, force: bool = False) -> str | None:
         """Copia diaria de la base (sin fotos, que ya están en Drive) a «Respaldos»."""
-        last = self.db.get_setting("drive_db_backup")
+        last = self.db.get_setting("db_backup_last")      # por ensayo (no es ajuste global)
         if not force and last and (_dt.datetime.now() - _dt.datetime.fromisoformat(last)
                                    ).total_seconds() < self.DB_BACKUP_EVERY_H * 3600:
             return None
@@ -453,15 +465,16 @@ class DriveBackup:
         from platform_utils import data_subdir
         folder = data_subdir("backups", "diarios")
         dest = _checkpoint_copy(self.db, os.path.join(
-            folder, f"PhenoRubus_base_{_dt.datetime.now():%Y-%m-%d_%H%M}.sqlite3"))
+            folder, f"PhenoRubus_base_{self.db.code + '_' if self.db.code else ''}"
+                    f"{_dt.datetime.now():%Y-%m-%d_%H%M}.sqlite3"))
         old = sorted(f for f in os.listdir(folder) if f.endswith(".sqlite3"))
         for f in old[:-self.DB_BACKUPS_KEPT]:
             try:
                 os.remove(os.path.join(folder, f))
             except OSError:
                 pass
-        self.db.set_setting("drive_db_backup", _now())
-        self.enqueue(None, dest, remote=f"Respaldos/{os.path.basename(dest)}")
+        self.db.set_setting("db_backup_last", _now())
+        self.enqueue(None, dest, remote=f"{self.prefix}Respaldos/{os.path.basename(dest)}")
         return dest
 
     def retry_errors(self) -> None:
@@ -576,15 +589,43 @@ class DriveBackup:
                 self.db.set_setting("drive_folders", {})
             raise
 
+    LEGACY_TOP = ("Año ", "Temporada ", "Respaldos")
+
+    def relocate_legacy(self) -> int:
+        """Hasta la 1.1.33 todo se subía directo a la carpeta raíz. Una sola vez, lo
+        existente (que es del ensayo «Nuevas variedades») pasa a su carpeta de ensayo."""
+        if self.db.code != "NV" or self.db.get_setting("drive_layout_v2", False):
+            return 0
+        root = self._folder(ROOT_FOLDER, None)
+        q = f"'{root}' in parents and mimeType='{FOLDER_MIME}' and trashed=false"
+        found = self._call("GET", f"{API}?" + urllib.parse.urlencode(
+            {"q": q, "fields": "files(id,name)", "spaces": "drive", "pageSize": "200"})).get("files", [])
+        moving = [f for f in found if f["name"].startswith(self.LEGACY_TOP)]
+        moved = 0
+        if moving:
+            dest = root
+            for part in self.prefix.strip("/").split("/"):
+                dest = self._folder(part, dest)
+            for f in moving:
+                self._call("PATCH", f"{API}/{f['id']}?" + urllib.parse.urlencode(
+                    {"addParents": dest, "removeParents": root, "fields": "id"}),
+                    b"{}", "application/json; charset=UTF-8")
+                moved += 1
+            self.db.set_setting("drive_folders", {})   # las rutas en caché cambiaron
+            self.db.log("move", "drive", None, f"{moved} carpetas a {self.prefix.strip('/')}")
+        self.db.set_setting("drive_layout_v2", True)
+        return moved
+
     def rename_legacy(self) -> int:
         """Fotos ya subidas con el nombre antiguo «ddmmaaaa-…»: se renombran en Drive a
         «aaaammdd-…» (la app solo puede tocar los archivos que ella misma subió)."""
-        from photo_rename import new_name
+        from photo_rename import known_codes, new_name
+        known = known_codes(self.db)
         done = 0
         for r in self.db.query("SELECT id, name, drive_id FROM drive_queue "
                                "WHERE status='done' AND drive_id IS NOT NULL"):
             head, _, base = (r["name"] or "").rpartition("/")
-            nn = new_name(base)
+            nn = new_name(base, self.db.code, known)
             if not nn:
                 continue
             try:
@@ -623,7 +664,8 @@ class DriveBackup:
         try:
             if self.wifi_only and self.metered():
                 raise Offline("Esperando Wi-Fi (datos móviles desactivados para el respaldo)")
-            self.rename_legacy()   # nombres antiguos ya subidos -> aaaammdd (una sola vez)
+            self.relocate_legacy()  # lo subido antes de los ensayos -> «I+D/Nuevas variedades»
+            self.rename_legacy()   # nombres antiguos ya subidos -> aaaammdd-NV-… (una sola vez)
             while True:
                 self._again = False
                 if self.wifi_only and self.metered():

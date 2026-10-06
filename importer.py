@@ -208,7 +208,7 @@ def import_file(db, path: str, classifier=None, train_ai: bool = True, progress=
                         f.write(src)
                     src = tmp
                 dest_dir = data_subdir("photos", f"T{season}", f"S{week['week_number']:02d}")
-                stored = store_photo(src, dest_dir, ph.photo_basename(v, week["start_date"], kind),
+                stored = store_photo(src, dest_dir, ph.photo_basename(v, week["start_date"], kind, trial=db.code),
                                      exact=True)
                 pid = db.add_photo(obs["id"], kind, stored, source="histórico",
                                    captured_at=(date.isoformat() + "T12:00:00") if date else None)

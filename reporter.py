@@ -297,6 +297,12 @@ class ReportGenerator:
     def _render(self, template: str, filename: str, kind: str, title: str,
                 images: ImageStore, package: str, **ctx) -> ReportResult:
         generated = _dt.datetime.now().strftime("%d-%m-%Y %H:%M")
+        ws = getattr(self.db, "workspace", None) or {}
+        if ws:   # ensayo o predio: en el subtítulo y (código) en el nombre del archivo
+            from workspaces import Workspaces
+            ctx["subtitle"] = " · ".join(x for x in (Workspaces.title(ws), ctx.get("subtitle")) if x)
+            head, _, tail = filename.partition("_")
+            filename = f"{head}_{self.db.code}_{tail}" if tail else f"{head}_{self.db.code}"
         html = "" if package == "pdf" else self.env.get_template(template).render(
             title=title, generated=generated, package=package, **ctx)
         base = os.path.join(self.out_dir, filename)

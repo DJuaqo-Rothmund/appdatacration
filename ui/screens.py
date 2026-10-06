@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import re
 import threading
 
 from kivy.clock import Clock, mainthread
@@ -323,7 +324,183 @@ class HomeScreen(MDScreen):
             getattr(self.ids, tab).refresh()
 
     def refresh_current(self):
+        self.update_banner()
         getattr(self.ids, self.ids.tabs.current or "sampling").refresh()
+
+    def update_banner(self):
+        """Franja bajo la barra: en qué ensayo o predio se está trabajando."""
+        ws = getattr(app(), "workspace", None)
+        if ws:
+            from workspaces import Workspaces
+            self.ids.ws_banner.text = f"{Workspaces.title(ws)}  ·  {ws['code']}"
+            self.ids.ws_banner.icon = "flask-outline" if ws["profile"] == "id" else "barn"
+
+
+class WorkspaceBanner(GlassButton):
+    text = StringProperty()
+    icon = StringProperty("flask-outline")
+
+
+class WorkspaceRow(GlassButton):
+    title = StringProperty()
+    subtitle = StringProperty()
+    code = StringProperty()
+    profile = StringProperty("id")
+    current = BooleanProperty(False)
+    ws = ObjectProperty(None, allownone=True)
+    screen = ObjectProperty()
+
+
+class WorkspacesScreen(MDScreen):
+    """Menú inicial: perfil I+D (ensayos) o Predio, y la lista para elegir dónde trabajar."""
+    profile = StringProperty("id")
+    show_archived = BooleanProperty(False)
+
+    def on_pre_enter(self, *_):
+        ws = getattr(app(), "workspace", None)
+        if ws:
+            self.profile = ws["profile"]
+        self.show_archived = False
+        self.refresh()
+
+    def set_profile(self, profile: str):
+        self.profile = profile
+        self.show_archived = False
+        self.refresh()
+
+    def toggle_archived(self):
+        self.show_archived = not self.show_archived
+        self.refresh()
+
+    def _stats(self, ws) -> str:
+        from workspaces import KINDS
+        a = app()
+        parts = [KINDS.get(ws["kind"], ws["kind"])]
+        try:
+            db = a.open_db(ws)
+            n = db.query_one("SELECT COUNT(*) AS n FROM varieties WHERE active=1")["n"]
+            one, many = {"tratamientos": ("parcela", "parcelas"), "predio": ("unidad", "unidades")
+                         }.get(ws["kind"], ("variedad", "variedades"))
+            parts.append(f"{n} {one if n == 1 else many}")
+            last = db.query_one("SELECT w.start_date FROM observations o JOIN sampling_weeks w "
+                                "ON w.id = o.week_id WHERE o.bbch_code IS NOT NULL "
+                                "ORDER BY w.start_date DESC LIMIT 1")
+            if last:
+                parts.append(f"último registro: {ph.week_title(last['start_date'])}")
+        except Exception:  # noqa: BLE001 - nunca bloquear el menú por una base dañada
+            pass
+        return " · ".join(parts)
+
+    def refresh(self):
+        a = app()
+        box = self.ids.ws_list
+        fast_clear(box)
+        items = a.workspaces.list(self.profile, archived=self.show_archived)
+        cur = getattr(a, "workspace", None) or {}
+        for ws in items:
+            row = WorkspaceRow(title=ws["name"], code=ws["code"], profile=ws["profile"],
+                               subtitle=self._stats(ws), current=ws["id"] == cur.get("id"),
+                               ws=ws, screen=self)
+            row.bind(on_release=lambda w: self.choose(w.ws))
+            box.add_widget(row)
+        if not items:
+            box.add_widget(MDLabel(text="No hay archivados." if self.show_archived else "Aún no hay nada aquí.",
+                                   font_style="Caption", adaptive_height=True, halign="center",
+                                   theme_text_color="Custom", text_color=c(theme.MUTED)))
+        is_id = self.profile == "id"
+        self.ids.hint.text = ("Ensayos de investigación y desarrollo: cada uno con sus variedades, "
+                              "semanas, fotos, mediciones e informes por separado." if is_id else
+                              "Predios comerciales: fenología por variedad, sector y equipo de riego.")
+        if self.show_archived:
+            self.ids.hint.text = "Archivados: no aparecen en la lista, pero sus datos se conservan."
+        self.ids.add_btn.text = "+ Nuevo ensayo" if is_id else "+ Nuevo predio"
+        self.ids.add_btn.opacity, self.ids.add_btn.disabled = (0, True) if self.show_archived else (1, False)
+        self.ids.archived_btn.text = "Volver a la lista" if self.show_archived else "Ver archivados"
+
+    def choose(self, ws):
+        if ws["archived"]:
+            app().toast("Está archivado: desarchívelo con ⋮ para trabajar en él.")
+            return
+        app().open_workspace(ws["id"])
+
+    def item_menu(self, ws):
+        a = app()
+
+        def rename():
+            from kivy.factory import Factory
+            form = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(0, dp(8), 0, 0))
+            form.add_widget(Factory.Field(hint_text="Nombre", text=ws["name"]))
+
+            def ok(f):
+                try:
+                    a.workspaces.rename(ws["id"], f.children[0].text)
+                except ValueError as exc:
+                    a.toast(str(exc))
+                    return False
+                a.workspace_renamed(ws["id"])
+                self.refresh()
+
+            form_dialog("Cambiar nombre", form, ok)
+
+        def archive(flag):
+            if flag and ws["id"] == (a.workspace or {}).get("id"):
+                a.toast("Primero cambie a otro ensayo o predio.")
+                return
+            a.workspaces.set_archived(ws["id"], flag)
+            self.refresh()
+
+        items = [("Cambiar nombre", f"Código {ws['code']} (no cambia)", rename)]
+        if ws["archived"]:
+            items.append(("Desarchivar", "Vuelve a la lista", lambda: archive(False)))
+        else:
+            items.append(("Archivar", "Ocultar de la lista; los datos se conservan", lambda: archive(True)))
+        pick_dialog(f"{ws['name']} · {ws['code']}", items)
+
+    def new_item(self):
+        a = app()
+        from kivy.factory import Factory
+        from workspaces import suggest_code
+        is_id = self.profile == "id"
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                           padding=(0, dp(12), 0, 0))
+        name = Factory.Field(hint_text="Nombre del ensayo" if is_id else "Nombre del predio")
+        code = Factory.Field(hint_text="Código (2 a 4 letras, va en el nombre de las fotos)")
+        state = {"auto": True}
+
+        def on_name(_w, text):
+            if state["auto"]:
+                code.text = suggest_code(text, a.workspaces.codes())
+
+        def on_code(_w, text):
+            up = text.upper()[:4]
+            if up != text:
+                code.text = up
+            if code.focus:
+                state["auto"] = False
+
+        name.bind(text=on_name)
+        code.bind(text=on_code)
+        form.add_widget(name)
+        form.add_widget(code)
+        if is_id:
+            form.add_widget(MDLabel(
+                text="Tipo: ensayo de variedades. (Los ensayos de tratamientos × repeticiones "
+                     "llegan en la próxima versión.)", font_style="Caption", adaptive_height=True,
+                theme_text_color="Custom", text_color=c(theme.MUTED)))
+
+        def ok(_f):
+            try:
+                ws = a.workspaces.create(self.profile, "variedades" if is_id else "predio",
+                                         name.text, code.text)
+            except ValueError as exc:
+                a.toast(str(exc))
+                return False
+            a.open_workspace(ws["id"])
+            a.toast(f"«{ws['name']}» creado: agregue sus "
+                    + ("variedades" if is_id else "unidades (variedad, sector y equipo de riego)")
+                    + " en Ajustes › Variedades")
+
+        form_dialog("Nuevo ensayo" if is_id else "Nuevo predio", form, ok, "CREAR")
 
 
 class SettingsScreen(MDScreen):
@@ -373,7 +550,17 @@ class SamplingTab(MDBoxLayout):
         box = self.ids.rows
         # Las filas se reutilizan: crear/destruir widgets KivyMD es lo más costoso.
         cache = getattr(self, "_rows", {})
-        if list(cache) != [r["variety"]["id"] for r in rows]:
+        if not rows:
+            fast_clear(box)
+            self._rows = {}
+            is_predio = (getattr(a, "workspace", None) or {}).get("profile") == "predio"
+            box.add_widget(MDLabel(
+                text=("Aún no hay unidades en este predio. Agréguelas en Ajustes › Variedades "
+                      "(variedad, sector y equipo de riego)." if is_predio else
+                      "Aún no hay variedades en este ensayo. Agréguelas en Ajustes › Variedades."),
+                font_style="Body2", adaptive_height=True, halign="center",
+                theme_text_color="Custom", text_color=c(theme.MUTED)))
+        elif list(cache) != [r["variety"]["id"] for r in rows]:
             fast_clear(box)
             cache = {}
             for r in rows:
@@ -725,8 +912,8 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
         v = {"name": self.ids.name.text, "code": self.ids.code.text,
              "sector": self.sector, "irrigation": self.irrigation}
         a = app()
-        g = ph.photo_basename(v, a.week["start_date"], "canopy")
-        d = ph.photo_basename(v, a.week["start_date"], "detail")
+        g = ph.photo_basename(v, a.week["start_date"], "canopy", trial=a.db.code)
+        d = ph.photo_basename(v, a.week["start_date"], "detail", trial=a.db.code)
         self.ids.photo_hint.text = f"Nombre de las fotos: {g}.jpg (general) · {d}.jpg (detalle)"
 
     def load_custom(self):
@@ -1048,7 +1235,7 @@ class ObservationScreen(MDScreen):
         """Fotos adjuntas a ESTE registro semanal (tomar o elegir de la galería) con descripción."""
         a = app()
         variety, week = self.variety, self.week
-        base = ph.photo_basename(variety, week["start_date"], "attachment")
+        base = ph.photo_basename(variety, week["start_date"], "attachment", trial=a.db.code)
 
         def done(result, origin):
             paths = [p for p in (result if isinstance(result, list) else [result]) if p]
@@ -1134,7 +1321,7 @@ class ObservationScreen(MDScreen):
                 error = None
                 try:
                     dest_dir = data_subdir("photos", f"T{season}", f"S{n:02d}")
-                    base = ph.photo_basename(self.variety, self.week["start_date"], kind)
+                    base = ph.photo_basename(self.variety, self.week["start_date"], kind, trial=a.db.code)
                     for tmp in paths:
                         if self.obs["latitude"] is None:
                             import geo
@@ -1169,7 +1356,7 @@ class ObservationScreen(MDScreen):
         if source == "camera":
             # Mismo nombre que en la app y en Drive: 20260928-C11G, 20260928-C11G-2…
             seq = len(a.db.list_photos(self.obs["id"], kind)) + 1
-            hint = ph.photo_basename(self.variety, self.week["start_date"], kind, seq)
+            hint = ph.photo_basename(self.variety, self.week["start_date"], kind, seq, trial=a.db.code)
             a.media.take_photo(done, hint, exact=True)
         else:
             a.media.pick_images(done)
@@ -1629,9 +1816,21 @@ class ReportsTab(MDScreen):
     def list_recent(self):
         box = self.ids.recent
         fast_clear(box)
-        folder = app().reports.out_dir
+        a = app()
+        folder = a.reports.out_dir
+        code = a.db.code
+
+        def mine(name: str) -> bool:   # solo los informes de este ensayo o predio
+            if not code:
+                return True
+            if f"_{code}_" in name:
+                return True
+            # Informes de versiones anteriores (sin código): eran de «Nuevas variedades».
+            return code == "NV" and not re.search(r"_[A-Z0-9]{2,4}_\d{4}", name)
+
         files = sorted((os.path.join(folder, f) for f in os.listdir(folder)
-                        if f.endswith((".pdf", ".html", ".zip"))), key=os.path.getmtime, reverse=True)
+                        if f.endswith((".pdf", ".html", ".zip", ".xlsx")) and mine(f)),
+                       key=os.path.getmtime, reverse=True)
         for p in files[:10]:
             ts = _dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%d-%m-%Y %H:%M")
             box.add_widget(ReportRow(title=os.path.basename(p), path=p,
@@ -1874,7 +2073,7 @@ class SettingsTab(MDScreen):
         def work():
             try:
                 from data_transfer import full_backup
-                path = full_backup(a.db)
+                path = full_backup(a.db, workspaces=a.workspaces, open_db=a.open_db)
                 a.media.save_public(path, "application/zip")   # una sola copia en Descargas
                 if a.db.get_setting("drive_enabled", False):
                     a.drive.enqueue(None, path, remote=f"Respaldos/{os.path.basename(path)}")
@@ -1926,7 +2125,8 @@ class SettingsTab(MDScreen):
         def work():
             try:
                 from data_transfer import restore
-                res = restore(a.db, path, progress=progress)
+                res = restore(a.db, path, progress=progress, workspaces=a.workspaces,
+                              open_db=a.open_db)
                 Clock.schedule_once(lambda *_: self._restored(res, None))
             except Exception as exc:  # noqa: BLE001
                 error = exc
@@ -2932,7 +3132,8 @@ class MeasureScreen(MDScreen):
         measure, week = self.measure, self.week
         start = _dt.date.fromisoformat(week["start_date"][:10])
         from platform_utils import slugify
-        base = f"{ph.photo_date(start)}-{slugify(measure['name'])[:40] or 'medicion'}"
+        code = f"{a.db.code}-" if a.db.code else ""
+        base = f"{ph.photo_date(start)}-{code}{slugify(measure['name'])[:40] or 'medicion'}"
 
         def done(result, origin):
             paths = [p for p in (result if isinstance(result, list) else [result]) if p]

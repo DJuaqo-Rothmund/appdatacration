@@ -70,29 +70,54 @@ _EXTRA_IMAGES = (("variety_attachments", "attachments", "adjuntos"),
                  ("measure_entries", "measures", "mediciones"))
 
 
-def full_backup(db, dest_dir: str | None = None) -> str:
-    """ZIP con la base y las fotos. Devuelve la ruta."""
-    dest_dir = dest_dir or data_subdir("backups")
-    path = os.path.join(dest_dir, f"PhenoRubus_respaldo_{_stamp()}.zip")
+def _write_workspace(zf, db, prefix: str = "") -> int:
+    """Base + fotos de UN ensayo dentro del ZIP (bajo `prefix`). Devuelve n.º de fotos."""
     tmp_db = _checkpoint_copy(db, os.path.join(data_subdir("tmp"), DB_NAME))
     manifest = {"app": "PhenoRubus", "created": _dt.datetime.now().isoformat(timespec="seconds"),
-                "photos": {}, "attachments": {}, "measures": {}}
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(tmp_db, DB_NAME)
-        for r in db.query("SELECT id, path FROM photos"):
-            if os.path.exists(r["path"]):
-                arc = f"fotos/{r['id']}_{os.path.basename(r['path'])}"
-                zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)  # JPEG ya comprimido
-                manifest["photos"][str(r["id"])] = arc
-        for table, key, folder in _EXTRA_IMAGES:
-            for r in db.query(f"SELECT id, path FROM {table} WHERE path IS NOT NULL"):
-                if os.path.exists(r["path"]):
-                    arc = f"{folder}/{r['id']}_{os.path.basename(r['path'])}"
-                    zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)
-                    manifest[key][str(r["id"])] = arc
-        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
+                "code": getattr(db, "code", ""), "photos": {}, "attachments": {}, "measures": {}}
+    zf.write(tmp_db, prefix + DB_NAME)
     os.remove(tmp_db)
-    db.log("backup", "full", None, f"{os.path.basename(path)} · {len(manifest['photos'])} fotos")
+    for r in db.query("SELECT id, path FROM photos"):
+        if os.path.exists(r["path"]):
+            arc = f"{prefix}fotos/{r['id']}_{os.path.basename(r['path'])}"
+            zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)  # JPEG ya comprimido
+            manifest["photos"][str(r["id"])] = arc
+    for table, key, folder in _EXTRA_IMAGES:
+        for r in db.query(f"SELECT id, path FROM {table} WHERE path IS NOT NULL"):
+            if os.path.exists(r["path"]):
+                arc = f"{prefix}{folder}/{r['id']}_{os.path.basename(r['path'])}"
+                zf.write(r["path"], arc, compress_type=zipfile.ZIP_STORED)
+                manifest[key][str(r["id"])] = arc
+    zf.writestr(prefix + "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
+    return len(manifest["photos"])
+
+
+def full_backup(db, dest_dir: str | None = None, workspaces=None, open_db=None) -> str:
+    """ZIP con la(s) base(s) y las fotos. Devuelve la ruta.
+
+    Con `workspaces` (registro de ensayos) el ZIP incluye TODO el teléfono: la base común
+    (IA, escala, ajustes) y cada ensayo/predio en «ensayos/<código>/». open_db(ws) abre
+    la base de un ensayo (por defecto workspaces.open)."""
+    dest_dir = dest_dir or data_subdir("backups")
+    path = os.path.join(dest_dir, f"PhenoRubus_respaldo_{_stamp()}.zip")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if workspaces is None:
+            n = _write_workspace(zf, db)
+        else:
+            from workspaces import COMMON_DB
+            tmp = _checkpoint_copy(workspaces.shared, os.path.join(data_subdir("tmp"), COMMON_DB))
+            zf.write(tmp, COMMON_DB)
+            os.remove(tmp)
+            n, listed = 0, []
+            for ws in workspaces.list() + workspaces.list(archived=True):
+                wdb = (open_db or workspaces.open)(ws)
+                n += _write_workspace(zf, wdb, f"ensayos/{ws['code']}/")
+                listed.append({k: ws[k] for k in ("code", "name", "profile", "kind")})
+            zf.writestr("manifest.json", json.dumps(
+                {"app": "PhenoRubus", "kind": "multi", "workspaces": listed,
+                 "created": _dt.datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False, indent=1))
+    db.log("backup", "full", None, f"{os.path.basename(path)} · {n} fotos")
     return path
 
 
@@ -129,28 +154,74 @@ def _validate(path: str) -> None:
         raise ValueError("El archivo no es un respaldo de PhenoRubus")
 
 
-def restore(db, path: str, progress=None) -> RestoreResult:
-    """Reemplaza los datos actuales por los del respaldo (.zip o .sqlite3)."""
-    tmp = data_subdir("tmp", "restore")
-    manifest, extra = {}, {}
-    zf = None
-    if zipfile.is_zipfile(path):
-        zf = zipfile.ZipFile(path)
-        names = zf.namelist()
-        db_name = next((n for n in names if n.endswith((".sqlite3", ".db"))), None)
-        if db_name is None:
-            raise ValueError("El ZIP no contiene una base de datos (use «Importar informes» para ZIP de informes)")
-        src = os.path.join(tmp, "restore.sqlite3")
-        with open(src, "wb") as f:
-            f.write(zf.read(db_name))
-        if "manifest.json" in names:
-            full = json.loads(zf.read("manifest.json"))
-            manifest = full.get("photos", {})
-            extra = {key: full.get(key, {}) for _t, key, _f in _EXTRA_IMAGES}
-    else:
-        src = path
-    _validate(src)
+def restore(db, path: str, progress=None, workspaces=None, open_db=None) -> RestoreResult:
+    """Reemplaza los datos actuales por los del respaldo (.zip o .sqlite3).
 
+    Respaldo completo (con «comun.sqlite3» y `workspaces`): se restauran TODOS los ensayos
+    y la base común. Respaldo de una sola base (versiones anteriores): se restaura en el
+    ensayo actual y su memoria de la IA se suma a la común."""
+    tmp = data_subdir("tmp", "restore")
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as zf:
+            if workspaces is not None and "comun.sqlite3" in zf.namelist():
+                return _restore_all(db, zf, workspaces, open_db or workspaces.open, progress)
+            names = zf.namelist()
+            db_name = next((n for n in names if n.endswith((".sqlite3", ".db"))), None)
+            if db_name is None:
+                raise ValueError("El ZIP no contiene una base de datos (use «Importar informes» "
+                                 "para informes)")
+            src = os.path.join(tmp, "restore.sqlite3")
+            with open(src, "wb") as f:
+                f.write(zf.read(db_name))
+            full = json.loads(zf.read("manifest.json")) if "manifest.json" in names else {}
+            return _restore_into(db, src, zf, full, progress)
+    return _restore_into(db, path, None, {}, progress)
+
+
+def _restore_all(db, zf, workspaces, open_db, progress) -> RestoreResult:
+    from workspaces import COMMON_DB, SCHEMA
+    shared = workspaces.shared
+    keep = {k: shared.get_setting(k) for k in ("drive_enabled", "drive_wifi_only", "drive_status",
+                                              "drive_folders") if shared.get_setting(k) is not None}
+    src = os.path.join(data_subdir("tmp", "restore"), COMMON_DB)
+    with open(src, "wb") as f:
+        f.write(zf.read(COMMON_DB))
+    _checkpoint_copy(shared, os.path.join(data_subdir("backups"), f"antes_de_restaurar_comun_{_stamp()}.sqlite3"))
+    with shared._lock:
+        s = sqlite3.connect(src)
+        try:
+            s.backup(shared.conn)
+        finally:
+            s.close()
+        shared.init_schema()
+        shared.conn.executescript(SCHEMA)
+    for k, v in keep.items():
+        shared.set_setting(k, v)
+    total = RestoreResult()
+    for ws in workspaces.list() + workspaces.list(archived=True):
+        prefix = f"ensayos/{ws['code']}/"
+        if prefix + DB_NAME not in zf.namelist():
+            continue
+        wsrc = os.path.join(data_subdir("tmp", "restore"), f"{ws['code']}.sqlite3")
+        with open(wsrc, "wb") as f:
+            f.write(zf.read(prefix + DB_NAME))
+        man = json.loads(zf.read(prefix + "manifest.json")) if prefix + "manifest.json" in zf.namelist() else {}
+        r = _restore_into(open_db(ws), wsrc, zf, man, progress, migrate_ai=False)
+        total.observations += r.observations
+        total.photos += r.photos
+        total.photos_restored += r.photos_restored
+        total.photos_relinked += r.photos_relinked
+        total.photos_missing += r.photos_missing
+        total.missing += [f"{ws['code']} · {m}" for m in r.missing]
+        total.safety_copy = total.safety_copy or r.safety_copy
+    return total
+
+
+def _restore_into(db, src: str, zf, full: dict, progress=None, migrate_ai: bool = True) -> RestoreResult:
+    """Restaura una base (archivo `src`) y sus fotos (del ZIP, según el manifiesto) en `db`."""
+    manifest = full.get("photos", {})
+    extra = {key: full.get(key, {}) for _t, key, _f in _EXTRA_IMAGES}
+    _validate(src)
     res = RestoreResult()
     res.safety_copy = _checkpoint_copy(
         db, os.path.join(data_subdir("backups"), f"antes_de_restaurar_{_stamp()}.sqlite3"))
@@ -187,19 +258,22 @@ def restore(db, path: str, progress=None) -> RestoreResult:
                 with zf.open(arc) as fin, open(dest, "wb") as fout:
                     shutil.copyfileobj(fin, fout)
                 db.execute(f"UPDATE {table} SET path=? WHERE id=?", (dest, r["id"]))
-    if zf is not None:
-        zf.close()
     rel = relink_photos(db)
     res.photos_relinked, res.photos_missing, res.missing = rel["relinked"], rel["missing"], rel["items"]
     res.observations = db.query_one("SELECT COUNT(*) AS n FROM observations")["n"]
     res.photos = len(rows)
+    if migrate_ai and getattr(db, "shared", None) is not None:
+        # Respaldo de una sola base (versiones anteriores): su memoria de la IA se suma.
+        from workspaces import migrate_ai_to_shared
+        migrate_ai_to_shared(db, db.shared, db.code)
     db.log("restore", "database", None, res.summary())
     return res
 
 
 def _set_path(db, photo_id: int, path: str) -> None:
     db.execute("UPDATE photos SET path=? WHERE id=?", (path, photo_id))
-    db.execute("UPDATE ai_references SET image_path=? WHERE photo_id=?", (path, photo_id))
+    db.ai_db.execute("UPDATE ai_references SET image_path=? WHERE photo_id=? "
+                     "AND COALESCE(workspace, '')=?", (path, photo_id, db.code))
 
 
 # ------------------------------------------------------- reenlazar originales
@@ -217,7 +291,7 @@ TIME_WINDOW_AFTER = _dt.timedelta(minutes=2)
 
 # Nombre «20260928-C11G.jpg» (o el anterior «28092026-C11G.jpg»; «-2», «-3»… o « (1)»
 # si Android lo duplicó).
-_DATED_RE = re.compile(r"^(?P<key>\d{8}-[A-Za-z0-9]+[GD])(?:-(?P<seq>\d+))?(?: \((?P<dup>\d+)\))?\.jpe?g$",
+_DATED_RE = re.compile(r"^(?P<key>\d{8}-(?:[A-Z0-9]{2,4}-)?[A-Za-z0-9]+[GD])(?:-(?P<seq>\d+))?(?: \((?P<dup>\d+)\))?\.jpe?g$",
                        re.IGNORECASE)
 
 
@@ -270,10 +344,10 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
         "JOIN varieties v ON v.id = o.variety_id JOIN sampling_weeks w ON w.id = o.week_id "
         "ORDER BY p.id")
 
-    def base_name(r, legacy=False):
+    def base_name(r, legacy=False, trial=None):
         return ph.photo_basename({"name": r["variety"], "code": r["vcode"], "sector": r["vsector"],
                                   "irrigation": r["virrigation"]}, r["start_date"], r["kind"],
-                                 legacy=legacy)
+                                 legacy=legacy, trial=db.code if trial is None else trial)
 
     def link(r, src):
         used.add(src)
@@ -286,7 +360,8 @@ def relink_photos(db, dirs: list[str] | None = None) -> dict:
             continue
         # 1) Nombre «20260928-C11G» (fecha de la semana + variedad + G/D), o el de las
         #    versiones hasta la 1.1.30 con la fecha al revés: «28092026-C11G».
-        cands = [c for key in (base_name(r), base_name(r, legacy=True))
+        keys = (base_name(r), base_name(r, trial=""), base_name(r, legacy=True, trial=""))
+        cands = [c for key in dict.fromkeys(keys)
                  for c in dated.get(key.lower(), []) if c[1] not in used]
         if cands:
             link(r, cands[0][1])
@@ -550,7 +625,8 @@ def import_reports(db, paths: list[str], progress=None) -> ReportImport:
                 with open(tmp, "wb") as f:
                     f.write(data)
                 dest_dir = data_subdir("photos", f"T{week['season']}", f"S{week['week_number']:02d}")
-                stored = store_photo(tmp, dest_dir, ph.photo_basename(v, week["start_date"], kind),
+                stored = store_photo(tmp, dest_dir, ph.photo_basename(v, week["start_date"], kind,
+                                                                      trial=db.code),
                                      exact=True)
                 if kind in missing_file:
                     _set_path(db, missing_file[kind]["id"], stored)
