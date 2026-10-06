@@ -96,7 +96,9 @@ def explain(error: str) -> str:
         return f"{API_HINTS[m[1]]} (código {m[1]})"
     if "ClassNotFound" in (error or "") or "NoClassDefFound" in (error or "") \
             or "Class not found" in (error or ""):
-        return f"No se encontró un componente de Google Play en la app. Detalle: {error[-160:]}"
+        # El comienzo dice QUÉ clase faltó (el final es solo la pila de llamadas).
+        head = " ".join((error or "").split())[:220]
+        return f"La app no pudo cargar una clase de Android/Google. Detalle: {head}"
     return error
 
 
@@ -324,7 +326,11 @@ class DriveBackup:
     @property
     def authorizer(self):
         if self._authorizer is None and IS_ANDROID:
-            self._authorizer = AndroidAuthorizer(log=self.log)
+            # Se crea en el hilo principal: al registrarse para recibir el resultado de la
+            # cuenta de Google, pyjnius crea un «listener» Java que solo encuentra las
+            # clases de la app desde ese hilo (desde un hilo de fondo fallaba con
+            # ClassNotFoundException · «No se encontró un componente…»).
+            self._authorizer = AndroidAuthorizer._on_main(lambda: AndroidAuthorizer(log=self.log))
         return self._authorizer
 
     def log(self, message: str, error: bool = False) -> None:
