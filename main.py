@@ -46,7 +46,8 @@ from android_bridge import create_media, make_thumbnail, request_runtime_permiss
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, get_data_dir, resource_path  # noqa: E402
 from ui.screens import (AILabScreen, HomeScreen, MeasureScreen, ObservationScreen,  # noqa: E402
-                        PinForm, SettingsScreen, SplashScreen, StartScreen, VarietyScreen,
+                        PinForm, SectorsScreen, SettingsScreen, SplashScreen, StartScreen,
+                        VarietyScreen,
                         WorkspacesScreen, form_dialog)
 from workspaces import Workspaces  # noqa: E402
 
@@ -156,8 +157,16 @@ class FenoRubusApp(MDApp):
         return db
 
     def open_workspaces(self, profile: str | None = None):
-        self.workspaces_screen.forced_profile = profile
+        """profile: «id» o «predio» desde la pantalla de inicio (menú solo de ese perfil)."""
+        scr = self.workspaces_screen
+        scr.menu_mode = profile is not None
+        if profile:
+            scr.profile = profile
         self.go("workspaces")
+
+    @property
+    def sectors(self):
+        return self._screen(SectorsScreen, "sectors")
 
     @property
     def start(self):
@@ -183,7 +192,7 @@ class FenoRubusApp(MDApp):
             if self.home is not None:
                 self.home.update_banner()
 
-    def open_workspace(self, ws_id: int):
+    def open_workspace(self, ws_id: int, target: str = "home"):
         """Cambia de ensayo o predio: todas las pantallas se rehacen con sus datos."""
         ws = self.workspaces.get(ws_id)
         if ws is None:
@@ -203,7 +212,12 @@ class FenoRubusApp(MDApp):
         self.home = HomeScreen(name="home")
         self.sm.add_widget(self.home)
         self.home.refresh_current()
-        self.sm.current = "home"
+        if target == "sectors":   # predio: lista de sectores; «atrás» vuelve a la lista de predios
+            self.sectors
+            self._history = ["start", "workspaces"]
+            self.sm.current = "sectors"
+        else:
+            self.sm.current = "home"
         self.toast(f"{Workspaces.title(ws)} ({ws['code']})")
         self.workers.submit(self._rename_photos)
         if self.db.get_setting("drive_enabled", False):

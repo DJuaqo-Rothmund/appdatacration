@@ -369,6 +369,48 @@
         theme_text_color: "Custom"
         text_color: c(theme.LEAF_DARK)
 
+<GoogleButton>:
+    size_hint: 1, None
+    height: dp(54)
+    canvas.before:
+        Color:
+            rgba: 0, 0, 0, .08
+        RoundedRectangle:
+            pos: self.x, self.y - dp(2)
+            size: self.size
+            radius: [self.height / 2]
+        Color:
+            rgba: (.93, .93, .93, 1) if self.state == "down" else (1, 1, 1, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [self.height / 2]
+        Color:
+            rgba: .85, .85, .85, 1
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, self.height / 2)
+            width: dp(1)
+    BoxLayout:
+        size_hint: None, None
+        size: dp(26) + dp(12) + lbl.texture_size[0], dp(26)
+        pos_hint: {"center_x": .5, "center_y": .5}
+        spacing: dp(12)
+        Image:
+            source: theme.GOOGLE_G
+            size_hint: None, None
+            size: dp(24), dp(24)
+            pos_hint: {"center_y": .5}
+            mipmap: True
+        Label:
+            id: lbl
+            text: root.text
+            font_size: "16sp"
+            bold: True
+            color: .12, .12, .12, 1
+            size_hint: None, None
+            size: self.texture_size
+            pos_hint: {"center_y": .5}
+
 <StartScreen>:
     md_bg_color: 0, 0, 0, 0
     MDBoxLayout:
@@ -410,19 +452,8 @@
         Muted:
             id: google_hint
             halign: "center"
-        MDRectangleFlatIconButton:
+        GoogleButton:
             id: google_btn
-            icon: "google"
-            text: "Conectar cuenta de Google"
-            size_hint: 1, None
-            height: dp(52)
-            font_size: "15sp"
-            theme_text_color: "Custom"
-            text_color: c(theme.LEAF_DARK)
-            icon_color: c(theme.LEAF_DARK)
-            line_color: c(theme.LINE)
-            md_bg_color: 1, 1, 1, .85
-            rounded_button: True
             on_release: root.connect_google()
         PrimaryButton:
             text: "Continuar de forma local"
@@ -650,11 +681,13 @@
         orientation: "vertical"
         TopBar:
             id: bar
-            title: "Ensayos y predios"
+            title: ("I+D · Ensayos" if root.profile == "id" else "Predios") if root.menu_mode else "Ensayos y predios"
             left_action_items: [["arrow-left", lambda x: app.back()]]
         MDBoxLayout:
             size_hint_y: None
-            height: dp(56)
+            height: 0 if root.menu_mode else dp(56)
+            opacity: 0 if root.menu_mode else 1
+            disabled: root.menu_mode
             padding: dp(16), dp(8), dp(16), dp(4)
             spacing: dp(8)
             SegButton:
@@ -690,6 +723,95 @@
                     theme_text_color: "Custom"
                     text_color: c(theme.LEAF_DARK)
                     on_release: root.toggle_archived()
+
+<SectorsScreen>:
+    md_bg_color: 0, 0, 0, 0
+    MDBoxLayout:
+        orientation: "vertical"
+        TopBar:
+            id: bar
+            title: "Sectores"
+            left_action_items: [["arrow-left", lambda x: app.back()]]
+        MDScrollView:
+            do_scroll_x: False
+            MDBoxLayout:
+                orientation: "vertical"
+                adaptive_height: True
+                padding: dp(16), dp(12), dp(16), dp(24)
+                spacing: dp(10)
+                Muted:
+                    id: hint
+                MDBoxLayout:
+                    id: rows
+                    orientation: "vertical"
+                    adaptive_height: True
+                    spacing: dp(8)
+                PrimaryButton:
+                    text: "+ Nuevo sector"
+                    on_release: root.add_sector()
+                GhostButton:
+                    icon: "calendar-week"
+                    text: "Ir al muestreo semanal"
+                    on_release: app.enter_home()
+
+<SectorRow>:
+    orientation: "horizontal"
+    padding: dp(12), dp(8), dp(4), dp(8)
+    spacing: dp(12)
+    radius: [dp(14)]
+    elevation: 0
+    size_hint_y: None
+    height: dp(74)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
+    MDLabel:
+        text: root.badge
+        bold: True
+        halign: "center"
+        font_style: "Subtitle2"
+        size_hint: None, None
+        size: dp(52), dp(48)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: 1, 1, 1, 1
+        canvas.before:
+            Color:
+                rgba: c(theme.BERRY)
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(12)]
+    MDBoxLayout:
+        orientation: "vertical"
+        adaptive_height: True
+        spacing: dp(2)
+        pos_hint: {"center_y": .5}
+        MDLabel:
+            text: root.title
+            font_style: "Subtitle1"
+            bold: True
+            shorten: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.INK)
+        MDLabel:
+            text: root.subtitle
+            font_style: "Caption"
+            shorten: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.MUTED)
+    MDIcon:
+        icon: "check-circle" if root.done else "chevron-right"
+        size_hint: None, None
+        size: dp(28), dp(28)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF) if root.done else c(theme.MUTED)
+    MDIconButton:
+        icon: "pencil-outline"
+        pos_hint: {"center_y": .5}
+        on_release: root.screen.edit_sector(root.variety_id)
 
 <WorkspaceRow>:
     orientation: "horizontal"

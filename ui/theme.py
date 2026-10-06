@@ -52,6 +52,7 @@ START_ID = resource_path("assets", "ui", "start_id.jpg")
 START_PREDIO = resource_path("assets", "ui", "start_predio.jpg")
 START_AI = resource_path("assets", "ui", "start_ai.jpg")
 AI_ICON = resource_path("assets", "ui", "ai_outline.png")
+GOOGLE_G = resource_path("assets", "ui", "google_g.png")
 # Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android
 # (buildozer.spec › android.presplash_color) para que ambas se vean como una sola.
 SPLASH_BG = "#F2F4EE"

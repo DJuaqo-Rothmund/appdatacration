@@ -12,6 +12,7 @@ from kivy.clock import Clock, mainthread
 from kivy.metrics import dp
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.layout import Layout
 from kivy.uix.widget import Widget
 from kivy.properties import (BooleanProperty, ColorProperty, ListProperty, NumericProperty,
@@ -440,6 +441,11 @@ class StartCircle(ButtonBehavior, MDBoxLayout):
     diameter = NumericProperty(dp(124))
 
 
+class GoogleButton(ButtonBehavior, FloatLayout):
+    """Botón «Inicia sesión con Google» (blanco, con la G de colores)."""
+    text = StringProperty("Inicia sesión con Google")
+
+
 class StartScreen(MDScreen):
     """Lo primero que se ve al abrir la app: I+D, Predio, Asistente IA y la cuenta de Google."""
 
@@ -458,7 +464,7 @@ class StartScreen(MDScreen):
             self.ids.google_btn.text = "Cambiar cuenta de Google"
             self.ids.google_hint.text = f"Respaldo en Google Drive activo · {who}"
         else:
-            self.ids.google_btn.text = "Conectar cuenta de Google"
+            self.ids.google_btn.text = "Inicia sesión con Google"
             self.ids.google_hint.text = ("Conecte su cuenta para respaldar fotos e informes en Google Drive"
                                          if st["available"] else "")
 
@@ -484,6 +490,83 @@ class StartScreen(MDScreen):
         app().enter_home()
 
 
+class SectorRow(GlassButton):
+    variety_id = NumericProperty(0)
+    badge = StringProperty()
+    title = StringProperty()
+    subtitle = StringProperty()
+    done = BooleanProperty(False)
+    screen = ObjectProperty(None, allownone=True)
+
+
+class SectorsScreen(MDScreen):
+    """Predio: sectores (variedad + sector + equipo de riego) a muestrear esta semana.
+    Se crean aquí mismo (también siguen en Ajustes › Variedades)."""
+
+    def on_pre_enter(self, *_):
+        self.refresh()
+
+    def refresh(self):
+        a = app()
+        ws = a.workspace or {}
+        self.ids.bar.title = ws.get("name", "Sectores")
+        units = sorted(a.db.list_varieties(),
+                       key=lambda v: (v["sector"] or 99, v["irrigation"] or 99, v["name"].lower()))
+        box = self.ids.rows
+        fast_clear(box)
+        done = 0
+        for v in units:
+            obs = a.db.get_observation(v["id"], a.week["id"])
+            code = obs["bbch_code"] if obs else None
+            done += code is not None
+            parts = [f"Sector {v['sector']}" if v["sector"] else "Sin sector",
+                     f"Equipo de riego {v['irrigation']}" if v["irrigation"] else ""]
+            row = SectorRow(variety_id=v["id"], screen=self, done=code is not None,
+                            badge=ph.location_tag(v) or "—",
+                            title=" · ".join(p for p in parts if p),
+                            subtitle=f"{v['name']} · " + (f"BBCH {ph.code_str(code)} registrado"
+                                                          if code is not None else "sin registro esta semana"))
+            row.bind(on_release=lambda w: a.open_observation(w.variety_id, a.week["id"]))
+            box.add_widget(row)
+        self.ids.hint.text = (f"{ph.week_title(a.week)} · {done} de {len(units)} sectores registrados. "
+                              "Toque un sector para registrarlo." if units else
+                              "Aún no hay sectores: cree el primero con «+ Nuevo sector» "
+                              "(variedad, sector y equipo de riego).")
+
+    def add_sector(self):
+        a = app()
+        form = VarietyForm()
+        form.ids.name.hint_text = "Variedad"
+        form.ids.code.hint_text = "Código de la variedad (opcional, va en el nombre de las fotos)"
+
+        def ok(f):
+            if not f.sector:
+                a.toast("Elija el sector")
+                return False
+            try:
+                a.db.add_variety(f.ids.name.text, code=f.ids.code.text.strip(),
+                                 sector=f.sector or None, irrigation=f.irrigation or None)
+            except ValueError as exc:
+                # Misma variedad en otro sector: nombre único con la ubicación.
+                tag = ph.location_tag({"sector": f.sector, "irrigation": f.irrigation})
+                try:
+                    a.db.add_variety(f"{f.ids.name.text.strip()} {tag}", code=f.ids.code.text.strip(),
+                                     sector=f.sector or None, irrigation=f.irrigation or None)
+                except ValueError:
+                    f.ids.name.error = True
+                    f.ids.name.helper_text = str(exc)
+                    f.ids.name.helper_text_mode = "on_error"
+                    return False
+            a.toast("Sector agregado")
+            self.refresh()
+            a.refresh_home()
+
+        form_dialog("Nuevo sector", form, ok, "AGREGAR")
+
+    def edit_sector(self, variety_id: int):
+        app().open_variety(variety_id)
+
+
 class WorkspaceBanner(GlassButton):
     text = StringProperty()
     icon = StringProperty("flask-outline")
@@ -504,13 +587,11 @@ class WorkspacesScreen(MDScreen):
     profile = StringProperty("id")
     show_archived = BooleanProperty(False)
 
-    forced_profile = None   # perfil elegido en la pantalla de inicio (I+D o Predio)
+    menu_mode = BooleanProperty(False)   # abierto desde el inicio: solo I+D o solo Predio
 
     def on_pre_enter(self, *_):
         ws = getattr(app(), "workspace", None)
-        if self.forced_profile:
-            self.profile, self.forced_profile = self.forced_profile, None
-        elif ws:
+        if not self.menu_mode and ws:
             self.profile = ws["profile"]
         self.show_archived = False
         self.refresh()
@@ -531,7 +612,7 @@ class WorkspacesScreen(MDScreen):
         try:
             db = a.open_db(ws)
             n = db.query_one("SELECT COUNT(*) AS n FROM varieties WHERE active=1")["n"]
-            one, many = {"tratamientos": ("parcela", "parcelas"), "predio": ("unidad", "unidades")
+            one, many = {"tratamientos": ("parcela", "parcelas"), "predio": ("sector", "sectores")
                          }.get(ws["kind"], ("variedad", "variedades"))
             parts.append(f"{n} {one if n == 1 else many}")
             last = db.query_one("SELECT w.start_date FROM observations o JOIN sampling_weeks w "
@@ -573,7 +654,8 @@ class WorkspacesScreen(MDScreen):
         if ws["archived"]:
             app().toast("Está archivado: desarchívelo con ⋮ para trabajar en él.")
             return
-        app().open_workspace(ws["id"])
+        # Predio: primero la lista de sectores a muestrear; ensayo: el muestreo semanal.
+        app().open_workspace(ws["id"], target="sectors" if ws["profile"] == "predio" else "home")
 
     def item_menu(self, ws):
         a = app()
@@ -702,14 +784,14 @@ class WorkspacesScreen(MDScreen):
             if size:
                 db = a.open_db(ws)
                 db.setup_trial(*size)
-            a.open_workspace(ws["id"])
+            a.open_workspace(ws["id"], target="sectors" if ws["profile"] == "predio" else "home")
             if size:
                 a.toast(f"«{ws['name']}» creado con {size[0] * size[1]} parcelas. Ponga nombre a los "
                         "tratamientos en Ajustes › Parcelas")
             else:
                 a.toast(f"«{ws['name']}» creado: agregue sus "
-                        + ("variedades" if is_id else "unidades (variedad, sector y equipo de riego)")
-                        + " en Ajustes › Variedades")
+                        + ("variedades en Ajustes › Variedades" if is_id
+                           else "sectores con «+ Nuevo sector»"))
 
         form_dialog("Nuevo ensayo" if is_id else "Nuevo predio", form, ok, "CREAR")
 
