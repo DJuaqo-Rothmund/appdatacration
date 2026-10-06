@@ -52,6 +52,12 @@ START_ID = resource_path("assets", "ui", "start_id.png")           # trazo framb
 START_PREDIO = resource_path("assets", "ui", "start_predio.png")   # trazo verde
 START_AI = resource_path("assets", "ui", "start_ai.png")           # azul estelar
 LOGO_LINE = resource_path("assets", "ui", "logo_line.png")         # logo a línea
+START_BG = resource_path("assets", "ui", "start_bg.jpg")           # degradado + trazos tenues
+BLOB_ID = resource_path("assets", "ui", "blob_id.png")
+BLOB_PREDIO = resource_path("assets", "ui", "blob_predio.png")
+BLOB_AI = resource_path("assets", "ui", "blob_ai.png")             # burbuja nocturna con estrellas
+START_AI_NIGHT = resource_path("assets", "ui", "start_ai_night.png")
+AI_GLOW = resource_path("assets", "ui", "ai_glow.png")
 AI_ICON = resource_path("assets", "ui", "ai_outline.png")
 GOOGLE_G = resource_path("assets", "ui", "google_g.png")
 # Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android

@@ -435,11 +435,21 @@ class HomeScreen(MDScreen):
 
 
 class StartIcon(ButtonBehavior, BoxLayout):
-    """Botón de forma libre (ícono a línea) con su nombre debajo (pantalla de inicio)."""
+    """Botón de forma libre (ícono a línea sobre su burbuja) con su nombre debajo."""
     source = StringProperty()
+    bubble = StringProperty("")
+    glow = StringProperty("")
+    glow_level = NumericProperty(.55)   # brillo que «respira» (Asistente IA)
     label = StringProperty()
     color = ColorProperty([0, 0, 0, 1])
     diameter = NumericProperty(dp(130))
+    lift = NumericProperty(0)           # animación de entrada (desplazamiento hacia abajo)
+    reveal = NumericProperty(1)         # animación de entrada (opacidad)
+
+
+class StatusPill(Widget):
+    text = StringProperty()
+    color = ColorProperty([0, 0, 0, 1])
 
 
 class GoogleButton(ButtonBehavior, FloatLayout):
@@ -449,26 +459,134 @@ class GoogleButton(ButtonBehavior, FloatLayout):
 
 class StartScreen(MDScreen):
     """Lo primero que se ve al abrir la app: I+D, Predio, Asistente IA y la cuenta de Google."""
+    _animated = False
 
     def on_pre_enter(self, *_):
+        if not StartScreen._animated:      # animación de entrada: solo la primera vez
+            StartScreen._animated = True
+            self._prepare_intro()
         # La pantalla aparece al instante; los textos (consultas a la base) justo después.
         Clock.schedule_once(lambda *_: self.refresh(), 0)
+
+    def on_enter(self, *_):
+        delay = 0
+        if getattr(self, "_intro_ready", False):
+            self._intro_ready = False
+            self._play_intro()
+            delay = 1.0
+        self._breath_ev = Clock.schedule_once(lambda *_: self._breathe(), delay)
+
+    def on_leave(self, *_):
+        if getattr(self, "_breath_ev", None):
+            self._breath_ev.cancel()
+        if getattr(self, "_breath", None):
+            self._breath.cancel(self.ids.ic_ai)
+            self._breath = None
+
+    # ------------------------------------------------------------ animación
+    def _prepare_intro(self):
+        for w in (self.ids.ic_id, self.ids.ic_predio, self.ids.ic_ai):
+            w.reveal, w.lift = 0, dp(46)
+        self.ids.logo.opacity = 0
+        self._intro_ready = True
+
+    def _play_intro(self):
+        from kivy.animation import Animation
+        logo = self.ids.logo
+        h = logo.height
+        logo.height = h * .7
+        (Animation(opacity=1, height=h * 1.06, d=.32, t="out_cubic")
+         + Animation(height=h, d=.16, t="in_out_sine")).start(logo)
+        for i, w in enumerate((self.ids.ic_id, self.ids.ic_predio, self.ids.ic_ai)):
+            anim = Animation(d=.12 + .11 * i) + Animation(reveal=1, lift=0, d=.38, t="out_back")
+            anim.start(w)
+
+    def _breathe(self):
+        from kivy.animation import Animation
+        if getattr(self, "_breath", None):
+            return
+        anim = Animation(glow_level=1, d=1.6, t="in_out_sine") + Animation(glow_level=.45, d=1.6, t="in_out_sine")
+        anim.repeat = True
+        self._breath = anim
+        anim.start(self.ids.ic_ai)
+
+    # --------------------------------------------------------------- textos
+    @staticmethod
+    def _greeting() -> str:
+        h = _dt.datetime.now().hour
+        return "Buenos días" if 5 <= h < 12 else "Buenas tardes" if 12 <= h < 20 else "Buenas noches"
 
     def refresh(self):
         a = app()
         from workspaces import Workspaces
+        name = (a.db.get_setting("user_name") or "").strip()
+        self.ids.greeting.text = f"{self._greeting()}, {name}" if name else f"{self._greeting()} · toque para poner su nombre"
         ws = getattr(a, "workspace", None)
-        self.ids.ws_hint.text = f"Último usado: {Workspaces.title(ws)} ({ws['code']})" if ws else ""
+        try:
+            units = a.db.list_varieties()
+            done = a.db.query_one(
+                "SELECT COUNT(*) AS n FROM observations o JOIN varieties v ON v.id=o.variety_id "
+                "WHERE o.week_id=? AND o.bbch_code IS NOT NULL AND v.active=1", (a.week["id"],))["n"]
+            what = {"predio": "sectores", "tratamientos": "parcelas"}.get(
+                (ws or {}).get("kind") if (ws or {}).get("kind") == "tratamientos" else (ws or {}).get("profile"),
+                "registros")
+            self.ids.week_lbl.text = (f"Semana {ph.week_of_year(a.week)} · {done} de {len(units)} "
+                                      f"{what} · {Workspaces.title(ws)}" if ws and units else
+                                      (f"Último usado: {Workspaces.title(ws)} ({ws['code']})" if ws else ""))
+            self.ids.week_bar.progress = done / len(units) if units else 0
+        except Exception:  # noqa: BLE001 - nunca bloquear el inicio
+            self.ids.week_lbl.text = ""
+        self._pills()
         drive = a.drive
         st = drive.status()
         if st["enabled"]:
-            who = st.get("account") or "cuenta conectada"
             self.ids.google_btn.text = "Cambiar cuenta de Google"
-            self.ids.google_hint.text = f"Respaldo en Google Drive activo · {who}"
         else:
             self.ids.google_btn.text = "Inicia sesión con Google"
-            self.ids.google_hint.text = ("Conecte su cuenta para respaldar fotos e informes en Google Drive"
-                                         if st["available"] else "")
+
+    def _pills(self):
+        a = app()
+        box = self.ids.pills
+        box.clear_widgets()
+        pills = []
+        try:
+            st = a.drive.status()
+            if not st["enabled"]:
+                pills.append(("Drive sin conectar", theme.MUTED))
+            elif st["errors"]:
+                pills.append((f"Drive: {st['errors']} con error", theme.WARN))
+            elif st["pending"]:
+                pills.append((f"Drive: {st['pending']} por subir", theme.WARN))
+            else:
+                pills.append(("Drive al día", theme.LEAF))
+            last = a.db.query_one("SELECT MAX(observed_at) AS t FROM observations WHERE bbch_code IS NOT NULL")
+            if last and last["t"]:
+                days = (_dt.date.today() - _dt.date.fromisoformat(last["t"][:10])).days
+                when = "hoy" if days <= 0 else "ayer" if days == 1 else f"hace {days} días"
+                pills.append((f"Último registro: {when}", theme.BERRY))
+            n_ai = sum(a.db.reference_counts().values())
+            pills.append((f"IA: {n_ai} fotos", "#3A6BFF"))
+        except Exception:  # noqa: BLE001
+            pass
+        for text, col in pills:
+            pill = StatusPill(text=text, color=c(col))
+            pill.ids.lbl.texture_update()
+            pill.width = dp(26) + pill.ids.lbl.texture_size[0]
+            box.add_widget(pill)
+        box.width = sum(p.width for p in box.children) + dp(6) * max(0, len(box.children) - 1)
+
+    def ask_name(self):
+        from kivy.factory import Factory
+        a = app()
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(0, dp(8), 0, 0))
+        field = Factory.Field(hint_text="Su nombre (para el saludo)", text=a.db.get_setting("user_name") or "")
+        form.add_widget(field)
+
+        def ok(_f):
+            a.db.set_setting("user_name", field.text.strip())
+            self.refresh()
+
+        form_dialog("¿Cómo se llama?", form, ok)
 
     def open_profile(self, profile: str):
         app().open_workspaces(profile)

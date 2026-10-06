@@ -336,16 +336,41 @@
 <StartIcon>:
     orientation: "vertical"
     size_hint: None, None
-    size: root.diameter + dp(16), root.diameter + dp(34)
-    spacing: dp(6)
-    Image:
-        source: root.source
+    size: root.diameter + dp(40), root.diameter + dp(40)
+    spacing: dp(4)
+    opacity: root.reveal
+    canvas.before:
+        PushMatrix
+        Translate:
+            xy: 0, -root.lift
+    canvas.after:
+        PopMatrix
+    FloatLayout:
         size_hint: None, None
-        size: root.diameter, root.diameter
+        size: root.diameter + dp(40), root.diameter + dp(18)
         pos_hint: {"center_x": .5}
-        fit_mode: "contain"
-        mipmap: True
-        opacity: .55 if root.state == "down" else 1
+        Image:
+            source: root.bubble
+            opacity: 1 if root.bubble else 0
+            size_hint: None, None
+            size: root.diameter + dp(40), root.diameter + dp(40)
+            pos_hint: {"center_x": .5, "center_y": .5}
+            fit_mode: "contain"
+            mipmap: True
+        Image:
+            source: root.glow
+            opacity: root.glow_level if root.glow else 0
+            size_hint: None, None
+            size: root.diameter * .92, root.diameter * .92
+            pos_hint: {"center_x": .5, "center_y": .5}
+            fit_mode: "contain"
+        Image:
+            source: root.source
+            size_hint: None, None
+            size: (root.diameter * (.88 if root.state == "down" else 1),) * 2
+            pos_hint: {"center_x": .5, "center_y": .5}
+            fit_mode: "contain"
+            mipmap: True
     MDLabel:
         text: root.label
         halign: "center"
@@ -355,6 +380,32 @@
         height: dp(18)
         theme_text_color: "Custom"
         text_color: root.color
+
+<StatusPill>:
+    size_hint: None, None
+    height: dp(24)
+    width: dp(26) + lbl.texture_size[0]
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, .78
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+        Color:
+            rgba: root.color
+        Ellipse:
+            pos: self.x + dp(9), self.center_y - dp(3.5)
+            size: dp(7), dp(7)
+    Label:
+        id: lbl
+        text: root.text
+        font_size: "11sp"
+        bold: True
+        color: root.color
+        size_hint: None, None
+        size: self.texture_size
+        pos: root.x + dp(20), root.center_y - self.height / 2
 
 <GoogleButton>:
     size_hint: 1, None
@@ -400,58 +451,137 @@
 
 <StartScreen>:
     md_bg_color: 0, 0, 0, 0
+    canvas.before:
+        Rectangle:
+            source: theme.START_BG
+            pos: self.pos
+            size: self.size
     MDBoxLayout:
         orientation: "vertical"
-        padding: dp(24), dp(28), dp(24), dp(22)
-        spacing: dp(10)
+        padding: dp(22), dp(18), dp(22), dp(20)
+        spacing: dp(6)
         Image:
+            id: logo
             source: theme.LOGO
             fit_mode: "contain"
             mipmap: True
             size_hint_y: None
-            height: dp(112)
+            height: dp(104)
         Image:
             source: theme.WORDMARK
             fit_mode: "contain"
             mipmap: True
             size_hint_y: None
-            height: dp(44)
-        Muted:
-            id: ws_hint
+            height: dp(40)
+        MDLabel:
+            id: greeting
             halign: "center"
+            font_style: "Subtitle1"
+            bold: True
+            adaptive_height: True
+            theme_text_color: "Custom"
+            text_color: c(theme.LEAF_DARK)
+            on_touch_down: root.ask_name() if self.collide_point(*args[1].pos) else None
+        AnchorLayout:
+            size_hint_y: None
+            height: dp(26)
+            Widget:
+                id: week_chip
+                size_hint: None, None
+                height: dp(24)
+                width: week_lbl.texture_size[0] + dp(24)
+                opacity: 1 if week_lbl.text else 0
+                canvas.before:
+                    Color:
+                        rgba: 1, 1, 1, .8
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [dp(12)]
+                    Color:
+                        rgba: c(theme.LEAF_DARK, .25)
+                    Line:
+                        rounded_rectangle: (self.x, self.y, self.width, self.height, dp(12))
+                        width: dp(1)
+                Label:
+                    id: week_lbl
+                    font_size: "11.5sp"
+                    color: c(theme.LEAF_DARK)
+                    size_hint: None, None
+                    size: self.texture_size
+                    pos: week_chip.x + dp(12), week_chip.center_y - self.height / 2
+        AnchorLayout:
+            size_hint_y: None
+            height: dp(8)
+            Widget:
+                id: week_bar
+                size_hint: None, None
+                size: dp(152), dp(5)
+                progress: 0
+                opacity: 1 if week_lbl.text else 0
+                canvas:
+                    Color:
+                        rgba: c(theme.LEAF_DARK, .16)
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [dp(3)]
+                    Color:
+                        rgba: c(theme.LEAF)
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.width * self.progress, self.height
+                        radius: [dp(3)]
         Widget:
         MDBoxLayout:
             size_hint: None, None
-            size: dp(146) * 2 + dp(36), dp(176)
+            size: dp(150) * 2 + dp(16), dp(170)
             pos_hint: {"center_x": .5}
-            spacing: dp(36)
+            spacing: dp(16)
             StartIcon:
+                id: ic_id
                 source: theme.START_ID
+                bubble: theme.BLOB_ID
                 label: "I+D"
                 color: c("#AB1D59")
+                diameter: dp(112)
                 on_release: root.open_profile("id")
             StartIcon:
+                id: ic_predio
                 source: theme.START_PREDIO
+                bubble: theme.BLOB_PREDIO
                 label: "Predio"
                 color: c("#2F5643")
+                diameter: dp(112)
                 on_release: root.open_profile("predio")
         StartIcon:
-            source: theme.START_AI
+            id: ic_ai
+            source: theme.START_AI_NIGHT
+            bubble: theme.BLOB_AI
+            glow: theme.AI_GLOW
             label: "Asistente IA"
-            color: c("#3A6BFF")
-            diameter: dp(140)
+            color: c("#3A5AE6")
+            diameter: dp(118)
             pos_hint: {"center_x": .5}
             on_release: root.open_ai()
         Widget:
-        Muted:
-            id: google_hint
-            halign: "center"
+        AnchorLayout:
+            size_hint_y: None
+            height: dp(26)
+            BoxLayout:
+                id: pills
+                size_hint: None, None
+                height: dp(24)
+                spacing: dp(6)
+        Widget:
+            size_hint_y: None
+            height: dp(4)
         GoogleButton:
             id: google_btn
             on_release: root.connect_google()
         PrimaryButton:
             text: "Continuar de forma local"
-            height: dp(52)
+            height: dp(50)
             on_release: root.continue_local()
 
 # ---------------------------------------------------------------------------

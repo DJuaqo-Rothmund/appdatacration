@@ -257,7 +257,7 @@ class Database:
     # Ajustes que valen para todo el teléfono (no para un ensayo): viven en la base
     # común cuando la hay (cuenta de Drive, PIN, recordatorio, informes…).
     SHARED_SETTING_PREFIXES = ("drive_", "report_", "ai_pin", "ai_auto_learn", "reminder",
-                               "public_names", "last_workspace", "workspaces_")
+                               "public_names", "last_workspace", "workspaces_", "user_name")
 
     def __init__(self, path: str, seed: bool = True, shared: "Database | None" = None,
                  code: str = "", workspace: dict | None = None):
