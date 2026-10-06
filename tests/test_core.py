@@ -1158,3 +1158,57 @@ def test_treatments_by_replicates_trial_and_report(tmp_path):
     assert open(res.path, "rb").read(5) == b"%PDF-"
     db.close()
     wss.close()
+
+
+def test_drive_choose_and_switch_account(db, tmp_path):
+    """Conectar abre la lista de cuentas; al cambiar de cuenta lo subido se vuelve a subir
+    a la nueva y desconectar revoca el permiso en Google."""
+    import threading
+    from drive_backup import DriveBackup
+
+    class Auth:
+        account = None
+        picks = ["ana@gmail.com", "campo@gmail.com"]
+
+        def choose_account(self):
+            return self.picks.pop(0)
+
+        def get_token(self, interactive):
+            return f"tok-{self.account}"
+
+    calls = []
+    auth = Auth()
+    drive = DriveBackup(db, authorizer=auth, transport=lambda *a: calls.append(a) or (200, b"{}"),
+                        metered=lambda: False)
+    drive.flush = lambda: 0      # sin subidas en la prueba
+
+    def connect():
+        ev = threading.Event()
+        got = {}
+        drive.connect(lambda ok, msg: (got.update(ok=ok, msg=msg), ev.set()))
+        assert ev.wait(5)
+        return got
+
+    got = connect()
+    assert got["ok"] and "ana@gmail.com" in got["msg"]
+    assert auth.account == "ana@gmail.com" and drive.status()["account"] == "ana@gmail.com"
+    db.execute("INSERT INTO drive_queue(path, name, status, drive_id, created_at) "
+               "VALUES ('/x.jpg', 'x.jpg', 'done', 'f1', '2026-10-06')")
+    drive._sync_account_queue()
+    assert db.query_one("SELECT status FROM drive_queue")["status"] == "done"
+    db.set_setting("drive_folders", {"a": "b"})
+
+    got = connect()                                       # otra cuenta
+    assert got["ok"] and auth.account == "campo@gmail.com"
+    assert db.get_setting("drive_folders") == {}           # carpetas de la cuenta anterior
+    drive._sync_account_queue()
+    row = db.query_one("SELECT status, drive_id FROM drive_queue")
+    assert row["status"] == "pending" and row["drive_id"] is None
+
+    drive._token = ("tok-campo", 9e9)
+    drive.disconnect()
+    for t in threading.enumerate():
+        if t is not threading.current_thread() and t.daemon:
+            t.join(2)
+    assert drive.status()["enabled"] is False
+    assert any("oauth2.googleapis.com/revoke" in c[1] for c in calls)

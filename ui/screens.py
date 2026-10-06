@@ -2246,10 +2246,12 @@ class SettingsTab(MDScreen):
                 parts.append("última sincronización " + st["last_sync"][5:16].replace("T", " "))
         if st["message"] and (on or not st["available"]):
             parts.append(st["message"])
+        if on and st.get("account"):
+            parts.insert(0, st["account"])
         self.ids.drive_text.text = " · ".join(parts)
         self.ids.drive_bar.value = 100 * st["done"] / total if on and total else 0
         self.ids.drive_bar_box.opacity = 1 if on and total else 0
-        self.ids.drive_connect.text = ("Reconectar cuenta" if on else "Conectar Google Drive")
+        self.ids.drive_connect.text = ("Cambiar de cuenta" if on else "Conectar Google Drive")
         # Referencia FUERTE: al quitar el bloque del árbol, `ids` (referencia débil) lo
         # perdería y el recolector lo borraría → ReferenceError al volver a «General».
         if not hasattr(self, "_drive_slot"):
@@ -2271,7 +2273,7 @@ class SettingsTab(MDScreen):
         if not a.drive.available:
             a.toast("El respaldo en Google Drive funciona en el teléfono (Android).")
             return
-        a.toast("Conectando con Google… siga los pasos en pantalla")
+        a.toast("Elija la cuenta de Google y acepte el permiso")
 
         def done(ok, msg):
             Clock.schedule_once(lambda *_: (a.toast(msg), self.refresh_drive()))
@@ -2298,7 +2300,9 @@ class SettingsTab(MDScreen):
 
     def drive_disconnect(self):
         confirm("Desconectar Google Drive",
-                "Las fotos dejarán de subirse. Las que ya están en Drive y en el teléfono se conservan.",
+                "Las fotos dejarán de subirse y se quita el permiso de la app en esa cuenta. Lo que ya "
+                "está en Drive y en el teléfono se conserva. Para usar otra cuenta, toque después "
+                "«Conectar Google Drive» y elíjala de la lista.",
                 [("Desconectar", lambda: (app().drive.disconnect(), self.refresh_drive()))])
 
     def drive_wifi(self, active: bool):

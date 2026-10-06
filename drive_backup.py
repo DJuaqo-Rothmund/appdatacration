@@ -33,6 +33,7 @@ API = "https://www.googleapis.com/drive/v3/files"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id"
 MAX_ATTEMPTS = 6
 RC_DRIVE_AUTH = 7301
+RC_PICK_ACCOUNT = 7302
 
 
 class DriveError(Exception):
@@ -129,7 +130,8 @@ class AndroidAuthorizer:
     def __init__(self, log=None):
         from android import activity  # type: ignore
         self.log = log or (lambda msg: None)
-        self._pending = None          # (event, holder) de una autorización interactiva
+        self._pending = {}            # código -> (event, holder) de una pantalla de Google
+        self.account = None           # correo de la cuenta elegida (None: la que recuerde Google)
         self._listeners = []          # referencias vivas para pyjnius
         activity.bind(on_activity_result=self._on_activity_result)
 
@@ -166,8 +168,11 @@ class AndroidAuthorizer:
         from jnius import autoclass  # type: ignore
         scopes = autoclass("java.util.ArrayList")()
         scopes.add(autoclass("com.google.android.gms.common.api.Scope")(SCOPE))
-        req = autoclass("com.google.android.gms.auth.api.identity.AuthorizationRequest") \
-            .builder().setRequestedScopes(scopes).build()
+        builder = autoclass("com.google.android.gms.auth.api.identity.AuthorizationRequest") \
+            .builder().setRequestedScopes(scopes)
+        if self.account:   # cuenta elegida por el usuario (si no, Google usa la última autorizada)
+            builder = builder.setAccount(autoclass("android.accounts.Account")(self.account, "com.google"))
+        req = builder.build()
         act = autoclass("org.kivy.android.PythonActivity").mActivity
         client = autoclass("com.google.android.gms.auth.api.identity.Identity").getAuthorizationClient(act)
         return client, req
@@ -238,9 +243,41 @@ class AndroidAuthorizer:
             raise DriveError("Google no entregó un token de acceso")
         return token
 
+    def choose_account(self) -> str:
+        """Selector de cuentas de Google del teléfono. Devuelve el correo elegido."""
+        ev, holder = threading.Event(), {}
+        self._pending[RC_PICK_ACCOUNT] = (ev, holder)
+
+        def launch():
+            from jnius import autoclass  # type: ignore
+            AccountManager = autoclass("android.accounts.AccountManager")
+            current = autoclass("android.accounts.Account")(self.account, "com.google") \
+                if self.account else None
+            intent = AccountManager.newChooseAccountIntent(
+                current, None, ["com.google"], "Cuenta de Google para el respaldo en Drive",
+                None, None, None)
+            act = autoclass("org.kivy.android.PythonActivity").mActivity
+            act.startActivityForResult(intent, RC_PICK_ACCOUNT)
+
+        self.log("Abriendo la lista de cuentas de Google…")
+        try:
+            self._on_main(launch)
+        except Exception as exc:  # noqa: BLE001
+            self._pending.pop(RC_PICK_ACCOUNT, None)
+            raise DriveError(explain(f"No se pudo abrir la lista de cuentas: {exc}")) from exc
+        if not ev.wait(self.CONSENT_TIMEOUT):
+            self._pending.pop(RC_PICK_ACCOUNT, None)
+            raise DriveError("No se eligió ninguna cuenta (tiempo agotado)")
+        if "error" in holder:
+            raise DriveError("No se eligió ninguna cuenta")
+        name = self._on_main(lambda data=holder["data"]: data.getStringExtra("authAccount"))
+        if not name:
+            raise DriveError("No se eligió ninguna cuenta")
+        return str(name)
+
     def _resolve(self, pending_intent) -> str:
         ev, holder = threading.Event(), {}
-        self._pending = (ev, holder)
+        self._pending[RC_DRIVE_AUTH] = (ev, holder)
 
         def launch():
             from jnius import autoclass  # type: ignore
@@ -252,10 +289,10 @@ class AndroidAuthorizer:
         try:
             self._on_main(launch)
         except Exception as exc:  # noqa: BLE001
-            self._pending = None
+            self._pending.pop(RC_DRIVE_AUTH, None)
             raise DriveError(f"No se pudo abrir el selector de cuenta: {exc}") from exc
         if not ev.wait(self.CONSENT_TIMEOUT):  # el usuario elige cuenta y acepta
-            self._pending = None
+            self._pending.pop(RC_DRIVE_AUTH, None)
             raise DriveError("No se completó la conexión con Google (tiempo agotado)")
         if "error" in holder:
             raise DriveError(explain(holder["error"]))
@@ -273,11 +310,10 @@ class AndroidAuthorizer:
         return token
 
     def _on_activity_result(self, request_code, result_code, data):
-        if request_code != RC_DRIVE_AUTH or self._pending is None:
+        if request_code not in self._pending:
             return
-        ev, holder = self._pending
-        self._pending = None
-        if data is None:
+        ev, holder = self._pending.pop(request_code)
+        if data is None or (request_code == RC_PICK_ACCOUNT and result_code != -1):   # -1 = RESULT_OK
             holder["error"] = f"Conexión cancelada (resultado {result_code})"
         else:
             holder["data"] = data   # se interpreta en el hilo principal de Kivy
@@ -293,6 +329,14 @@ def is_metered() -> bool:
         act = autoclass("org.kivy.android.PythonActivity").mActivity
         Context = autoclass("android.content.Context")
         cm = act.getSystemService(Context.CONNECTIVITY_SERVICE)
+        # «Solo con Wi-Fi» = conectado por Wi-Fi o cable (aunque Android marque esa red Wi-Fi
+        # como «de uso medido», p. ej. un punto de acceso).
+        caps = cm.getNetworkCapabilities(cm.getActiveNetwork())
+        if caps is not None:
+            NC = autoclass("android.net.NetworkCapabilities")
+            if caps.hasTransport(NC.TRANSPORT_WIFI) or caps.hasTransport(NC.TRANSPORT_ETHERNET):
+                return False
+            return bool(caps.hasTransport(NC.TRANSPORT_CELLULAR)) or bool(cm.isActiveNetworkMetered())
         return bool(cm.isActiveNetworkMetered())
     except Exception:  # noqa: BLE001
         return False
@@ -331,7 +375,13 @@ class DriveBackup:
             # clases de la app desde ese hilo (desde un hilo de fondo fallaba con
             # ClassNotFoundException · «No se encontró un componente…»).
             self._authorizer = AndroidAuthorizer._on_main(lambda: AndroidAuthorizer(log=self.log))
+            self._authorizer.account = self.account
         return self._authorizer
+
+    @property
+    def account(self) -> str | None:
+        """Correo de la cuenta de Google elegida (None en conexiones de versiones anteriores)."""
+        return self.db.get_setting("drive_account") or None
 
     def log(self, message: str, error: bool = False) -> None:
         """Paso visible en la tarjeta de Ajustes + historial para «Ver diagnóstico»."""
@@ -354,7 +404,8 @@ class DriveBackup:
         return {"enabled": self.enabled, "available": self.available, "wifi_only": self.wifi_only,
                 "pending": counts.get("pending", 0), "done": counts.get("done", 0),
                 "errors": counts.get("error", 0), "running": self.running,
-                "last_sync": st.get("last_sync"), "message": st.get("message", "")}
+                "last_sync": st.get("last_sync"), "message": st.get("message", ""),
+                "account": self.account}
 
     def _set_message(self, message: str, synced: bool = False) -> None:
         st = self.db.get_setting("drive_status") or {}
@@ -488,18 +539,25 @@ class DriveBackup:
         self.flush_async()
 
     # ------------------------------------------------------------ conexión
-    def connect(self, callback=None) -> None:
-        """Autorización interactiva (desde Ajustes). callback(ok, mensaje)."""
+    def connect(self, callback=None, choose: bool = True) -> None:
+        """Autorización interactiva (desde Ajustes). callback(ok, mensaje).
+        choose=True: primero la lista de cuentas de Google del teléfono (cambiar de cuenta)."""
         def work():
             try:
                 self.log("Conectando con Google…")
                 if not self.available:
                     raise DriveError("El respaldo en Drive está disponible en el teléfono (Android)")
-                token = self.authorizer.get_token(interactive=True)
+                auth = self.authorizer
+                if choose and hasattr(auth, "choose_account"):
+                    name = auth.choose_account()
+                    self.log(f"Cuenta elegida: {name}")
+                    self.use_account(name)
+                token = auth.get_token(interactive=True)
                 self._token = (token, time.monotonic() + self.TOKEN_TTL)
                 self.db.set_setting("drive_enabled", True)
-                self.log("Cuenta conectada")
-                ok, msg = True, "Google Drive conectado"
+                who = self.account
+                self.log(f"Cuenta conectada{': ' + who if who else ''}")
+                ok, msg = True, f"Google Drive conectado{' (' + who + ')' if who else ''}"
             except Exception as exc:  # noqa: BLE001
                 ok, msg = False, explain(str(exc)) or exc.__class__.__name__
                 self.log(msg, error=True)
@@ -513,9 +571,43 @@ class DriveBackup:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def use_account(self, name: str | None) -> None:
+        """Cambia la cuenta de Google. Las carpetas en caché son de la cuenta anterior."""
+        if (name or None) != self.account:
+            self.db.set_setting("drive_account", name or None)
+            self.db.set_setting("drive_folders", {})
+            self._token = None
+        if self._authorizer is not None:
+            self._authorizer.account = name or None
+
+    def _sync_account_queue(self) -> None:
+        """Si se cambió de cuenta, lo ya subido a la cuenta anterior se vuelve a subir a la
+        nueva (cada ensayo o predio lo hace al sincronizar)."""
+        acc = self.account
+        if not acc:
+            return
+        mine = self.db.get_setting("queue_account")    # ajuste de ESTE ensayo (no global)
+        if mine and mine != acc:
+            n = self.db.execute("UPDATE drive_queue SET status='pending', attempts=0, drive_id=NULL, "
+                                "error='' WHERE status != 'pending'").rowcount
+            self.log(f"Nueva cuenta {acc}: {n} archivos se suben de nuevo")
+        if mine != acc:
+            self.db.set_setting("queue_account", acc)
+
     def disconnect(self) -> None:
+        """Deja de subir y retira el permiso de la app en la cuenta (para poder elegir otra)."""
+        token = self._token[0] if self._token else None
         self.db.set_setting("drive_enabled", False)
         self._token = None
+        if token:   # revocar en Google: la próxima conexión vuelve a pedir cuenta y permiso
+            def revoke():
+                try:
+                    self.transport("POST", "https://oauth2.googleapis.com/revoke?" +
+                                   urllib.parse.urlencode({"token": token}),
+                                   {"Content-Type": "application/x-www-form-urlencoded"}, b"")
+                except Exception:  # noqa: BLE001 - sin red: igual queda desconectada en la app
+                    pass
+            threading.Thread(target=revoke, daemon=True).start()
         self._set_message("Respaldo desactivado")
 
     def _get_token(self) -> str:
@@ -628,12 +720,18 @@ class DriveBackup:
         from photo_rename import known_codes, new_name
         known = known_codes(self.db)
         done = 0
+        todo = []
         for r in self.db.query("SELECT id, name, drive_id FROM drive_queue "
                                "WHERE status='done' AND drive_id IS NOT NULL"):
             head, _, base = (r["name"] or "").rpartition("/")
             nn = new_name(base, self.db.code, known)
-            if not nn:
-                continue
+            if nn:
+                todo.append((r, head, nn))
+        if todo:
+            self.log(f"Renombrando {len(todo)} fotos ya subidas (aaaammdd-{self.db.code or ''}…)")
+        for i, (r, head, nn) in enumerate(todo, 1):
+            if i % 10 == 0:
+                self._set_message(f"Renombrando en Drive {i} de {len(todo)}…")
             try:
                 self._call("PATCH", f"{API}/{r['drive_id']}?fields=id",
                            json.dumps({"name": nn}).encode(), "application/json; charset=UTF-8")
@@ -665,13 +763,14 @@ class DriveBackup:
         if not self._flush_lock.acquire(blocking=False):
             self._again = True  # hay otro envío en curso: que repase la cola al terminar
             return 0
-        uploaded = 0
+        uploaded = failed = 0
         self.running = True
         try:
             if self.wifi_only and self.metered():
                 raise Offline("Esperando Wi-Fi (datos móviles desactivados para el respaldo)")
+            self._sync_account_queue()
+            # Primero mover lo de versiones anteriores (rápido: unas pocas carpetas)…
             self.relocate_legacy()  # lo subido antes de los ensayos -> «I+D/Nuevas variedades»
-            self.rename_legacy()   # nombres antiguos ya subidos -> aaaammdd-NV-… (una sola vez)
             while True:
                 self._again = False
                 if self.wifi_only and self.metered():
@@ -679,7 +778,9 @@ class DriveBackup:
                 rows = self.db.query("SELECT * FROM drive_queue WHERE status='pending' ORDER BY id")
                 if not rows:
                     break
-                for r in rows:
+                for i, r in enumerate(rows, 1):
+                    if i == 1 or i % 5 == 0:
+                        self._set_message(f"Subiendo {i} de {len(rows)}…")
                     if not os.path.exists(r["path"]):
                         self.db.execute("UPDATE drive_queue SET status='error', error=? WHERE id=?",
                                         ("El archivo ya no existe en el teléfono", r["id"]))
@@ -693,6 +794,9 @@ class DriveBackup:
                     except (Offline, NeedsConsent):
                         raise
                     except DriveError as exc:
+                        failed += 1
+                        if failed <= 3:   # en el diagnóstico, sin llenarlo
+                            self.log(f"{os.path.basename(r['path'])}: {explain(str(exc))[:140]}", error=True)
                         attempts = r["attempts"] + 1
                         self.db.execute(
                             "UPDATE drive_queue SET attempts=?, error=?, status=? WHERE id=?",
@@ -707,6 +811,11 @@ class DriveBackup:
                         "SELECT COUNT(*) AS n FROM drive_queue WHERE status='pending' AND attempts=0")
                     if not left["n"]:
                         break
+            if uploaded:
+                self.log(f"{uploaded} archivo(s) subidos")
+            # …y al final renombrar lo ya subido con el nombre antiguo (puede ser lento: no debe
+            # retrasar las fotos nuevas).
+            self.rename_legacy()   # nombres antiguos ya subidos -> aaaammdd-NV-… (una sola vez)
             pending = self.status()["pending"]
             message, synced = ("Todo respaldado" if not pending else f"{pending} en espera"), True
         except Offline as exc:
