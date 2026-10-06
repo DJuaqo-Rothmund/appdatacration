@@ -433,6 +433,57 @@ class HomeScreen(MDScreen):
             self.ids.ws_banner.icon = "flask-outline" if ws["profile"] == "id" else "barn"
 
 
+class StartCircle(ButtonBehavior, MDBoxLayout):
+    """Botón circular con imagen y su nombre debajo (pantalla de inicio)."""
+    source = StringProperty()
+    label = StringProperty()
+    diameter = NumericProperty(dp(124))
+
+
+class StartScreen(MDScreen):
+    """Lo primero que se ve al abrir la app: I+D, Predio, Asistente IA y la cuenta de Google."""
+
+    def on_pre_enter(self, *_):
+        self.refresh()
+
+    def refresh(self):
+        a = app()
+        from workspaces import Workspaces
+        ws = getattr(a, "workspace", None)
+        self.ids.ws_hint.text = f"Último usado: {Workspaces.title(ws)} ({ws['code']})" if ws else ""
+        drive = a.drive
+        st = drive.status()
+        if st["enabled"]:
+            who = st.get("account") or "cuenta conectada"
+            self.ids.google_btn.text = "Cambiar cuenta de Google"
+            self.ids.google_hint.text = f"Respaldo en Google Drive activo · {who}"
+        else:
+            self.ids.google_btn.text = "Conectar cuenta de Google"
+            self.ids.google_hint.text = ("Conecte su cuenta para respaldar fotos e informes en Google Drive"
+                                         if st["available"] else "")
+
+    def open_profile(self, profile: str):
+        app().open_workspaces(profile)
+
+    def open_ai(self):
+        app().open_ai_lab()
+
+    def connect_google(self):
+        a = app()
+        if not a.drive.available:
+            a.toast("La cuenta de Google se conecta en el teléfono (Android).")
+            return
+        a.toast("Elija la cuenta de Google y acepte el permiso")
+
+        def done(ok, msg):
+            Clock.schedule_once(lambda *_: (a.toast(msg), self.refresh()))
+
+        a.drive.connect(done)
+
+    def continue_local(self):
+        app().enter_home()
+
+
 class WorkspaceBanner(GlassButton):
     text = StringProperty()
     icon = StringProperty("flask-outline")
@@ -453,9 +504,13 @@ class WorkspacesScreen(MDScreen):
     profile = StringProperty("id")
     show_archived = BooleanProperty(False)
 
+    forced_profile = None   # perfil elegido en la pantalla de inicio (I+D o Predio)
+
     def on_pre_enter(self, *_):
         ws = getattr(app(), "workspace", None)
-        if ws:
+        if self.forced_profile:
+            self.profile, self.forced_profile = self.forced_profile, None
+        elif ws:
             self.profile = ws["profile"]
         self.show_archived = False
         self.refresh()

@@ -47,6 +47,11 @@ MIND_FIRE = "#FFB454"
 BACKGROUND = resource_path("assets", "ui", "background.jpg")
 LOGO = resource_path("assets", "ui", "logo.png")
 WORDMARK = resource_path("assets", "ui", "wordmark.png")   # letra «PhenoRubus App»
+# Pantalla de inicio: botones circulares e ícono de la IA (frambuesa-cerebro delineada)
+START_ID = resource_path("assets", "ui", "start_id.jpg")
+START_PREDIO = resource_path("assets", "ui", "start_predio.jpg")
+START_AI = resource_path("assets", "ui", "start_ai.jpg")
+AI_ICON = resource_path("assets", "ui", "ai_outline.png")
 # Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android
 # (buildozer.spec › android.presplash_color) para que ambas se vean como una sola.
 SPLASH_BG = "#F2F4EE"

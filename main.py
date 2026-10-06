@@ -46,8 +46,8 @@ from android_bridge import create_media, make_thumbnail, request_runtime_permiss
 from notifications import ReminderManager  # noqa: E402
 from platform_utils import data_subdir, get_data_dir, resource_path  # noqa: E402
 from ui.screens import (AILabScreen, HomeScreen, MeasureScreen, ObservationScreen,  # noqa: E402
-                        PinForm, SettingsScreen, SplashScreen, VarietyScreen, WorkspacesScreen,
-                        form_dialog)
+                        PinForm, SettingsScreen, SplashScreen, StartScreen, VarietyScreen,
+                        WorkspacesScreen, form_dialog)
 from workspaces import Workspaces  # noqa: E402
 
 MIME = {".html": "text/html", ".zip": "application/zip", ".sqlite3": "application/x-sqlite3",
@@ -155,9 +155,24 @@ class FenoRubusApp(MDApp):
         db.workspace = dict(ws)
         return db
 
-    def open_workspaces(self):
-        self.workspaces_screen
+    def open_workspaces(self, profile: str | None = None):
+        self.workspaces_screen.forced_profile = profile
         self.go("workspaces")
+
+    @property
+    def start(self):
+        return self._screen(StartScreen, "start")
+
+    def open_start(self):
+        """Pantalla de inicio (I+D, Predio, Asistente IA, cuenta de Google)."""
+        self.start
+        self._history = []
+        self.sm.current = "start"
+
+    def enter_home(self):
+        self._history = []
+        self.sm.current = "home"
+        self.refresh_home()
 
     def workspace_renamed(self, ws_id: int):
         ws = self.workspaces.get(ws_id)
@@ -182,7 +197,7 @@ class FenoRubusApp(MDApp):
         self.week = self.db.current_week()
         self.season = self.week["season"]
         for name in list(self.sm.screen_names):
-            if name not in ("workspaces", "splash"):
+            if name not in ("workspaces", "splash", "start"):
                 self.sm.remove_widget(self.sm.get_screen(name))
         self._history = []
         self.home = HomeScreen(name="home")
@@ -216,7 +231,8 @@ class FenoRubusApp(MDApp):
 
     def _leave_splash(self, *_):
         self.sm.transition = FadeTransition(duration=0.35)
-        self.sm.current = "home"
+        self.start   # la pantalla de inicio es siempre lo primero al abrir la app
+        self.sm.current = "start"
         self.sm.transition = FadeTransition(duration=0.14)
         # Libera la pantalla de inicio (y su textura) cuando termina el fundido.
         Clock.schedule_once(lambda *_: self.sm.remove_widget(self.sm.get_screen("splash")), 0.6)
@@ -269,7 +285,7 @@ class FenoRubusApp(MDApp):
         inicio; si está usando la app, lo reintenta más tarde para no trabarla."""
         if not self._prewarm:
             return
-        if self.sm.current != "home" or self.sm.transition.is_active:
+        if self.sm.current not in ("home", "start") or self.sm.transition.is_active:
             Clock.schedule_once(self._prewarm_next, 3)
             return
         step = self._prewarm.pop(0)
@@ -311,7 +327,10 @@ class FenoRubusApp(MDApp):
             if self._file_manager and self._file_manager._window_manager_open:
                 self._file_manager.close()
                 return True
-            if self.sm.current != "home":
+            if self.sm.current == "home":   # desde el inicio de un ensayo -> pantalla de inicio
+                self.open_start()
+                return True
+            if self.sm.current not in ("home", "start"):
                 self.back()
                 return True
         return False

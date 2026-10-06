@@ -331,6 +331,105 @@
             pos_hint: {"center_x": .5, "y": .04}
 
 # ---------------------------------------------------------------------------
+# Inicio: I+D / Predio, Asistente IA y cuenta de Google
+# ---------------------------------------------------------------------------
+<StartCircle>:
+    orientation: "vertical"
+    size_hint: None, None
+    size: root.diameter + dp(20), root.diameter + dp(40)
+    spacing: dp(8)
+    Widget:
+        size_hint: None, None
+        size: root.diameter, root.diameter
+        pos_hint: {"center_x": .5}
+        canvas:
+            Color:
+                rgba: 0, 0, 0, .10
+            Ellipse:
+                pos: self.x + dp(1), self.y - dp(3)
+                size: self.size
+            Color:
+                rgba: (.86, .86, .86, 1) if root.state == "down" else (1, 1, 1, 1)
+            Ellipse:
+                pos: self.pos
+                size: self.size
+                source: root.source
+            Color:
+                rgba: 1, 1, 1, .9
+            Line:
+                circle: (self.center_x, self.center_y, self.width / 2)
+                width: dp(2.2)
+    MDLabel:
+        text: root.label
+        halign: "center"
+        font_style: "Caption"
+        bold: True
+        size_hint_y: None
+        height: dp(18)
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF_DARK)
+
+<StartScreen>:
+    md_bg_color: 0, 0, 0, 0
+    MDBoxLayout:
+        orientation: "vertical"
+        padding: dp(24), dp(28), dp(24), dp(22)
+        spacing: dp(10)
+        Image:
+            source: theme.WORDMARK
+            fit_mode: "contain"
+            mipmap: True
+            size_hint_y: None
+            height: dp(56)
+        Muted:
+            id: ws_hint
+            halign: "center"
+        Widget:
+        MDBoxLayout:
+            size_hint: None, None
+            size: dp(150) * 2 + dp(28), dp(164)
+            pos_hint: {"center_x": .5}
+            spacing: dp(28)
+            StartCircle:
+                source: theme.START_ID
+                label: "I+D"
+                on_release: root.open_profile("id")
+            StartCircle:
+                source: theme.START_PREDIO
+                label: "Predio"
+                on_release: root.open_profile("predio")
+        Widget:
+            size_hint_y: None
+            height: dp(8)
+        StartCircle:
+            source: theme.START_AI
+            label: "Asistente IA"
+            pos_hint: {"center_x": .5}
+            on_release: root.open_ai()
+        Widget:
+        Muted:
+            id: google_hint
+            halign: "center"
+        MDRectangleFlatIconButton:
+            id: google_btn
+            icon: "google"
+            text: "Conectar cuenta de Google"
+            size_hint: 1, None
+            height: dp(52)
+            font_size: "15sp"
+            theme_text_color: "Custom"
+            text_color: c(theme.LEAF_DARK)
+            icon_color: c(theme.LEAF_DARK)
+            line_color: c(theme.LINE)
+            md_bg_color: 1, 1, 1, .85
+            rounded_button: True
+            on_release: root.connect_google()
+        PrimaryButton:
+            text: "Continuar de forma local"
+            height: dp(52)
+            on_release: root.continue_local()
+
+# ---------------------------------------------------------------------------
 # Home + pestañas
 # ---------------------------------------------------------------------------
 <HomeScreen>:
@@ -340,8 +439,8 @@
         TopBar:
             id: bar
             title: "Muestreo semanal"
-            left_action_items: [["view-grid-outline", lambda x: app.open_workspaces(), "Ensayos y predios"]]
-            right_action_items: [["creation", lambda x: app.open_ai_lab(), "Entrenador de IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
+            left_action_items: [["home-outline", lambda x: app.open_start(), "Inicio"]]
+            right_action_items: [[theme.AI_ICON, lambda x: app.open_ai_lab(), "Asistente IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
         WorkspaceBanner:
             id: ws_banner
             on_release: app.open_workspaces()
