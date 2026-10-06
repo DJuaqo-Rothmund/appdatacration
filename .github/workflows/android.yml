@@ -62,6 +62,25 @@ jobs:
           sed -i "s/^version = .*/version = $VERSION/" buildozer.spec
           echo "$VERSION" > version.txt
           echo "Versión: $VERSION"
+      # freetype se descarga de download.savannah.gnu.org, que a veces no responde desde
+      # GitHub («Network is unreachable»). Se deja el archivo ya descargado (de un espejo
+      # si hace falta) donde python-for-android lo busca, con su marca de «descargado».
+      - name: Fuentes de freetype (con espejos)
+        run: |
+          V=2.14.1; F=freetype-$V.tar.gz
+          D=.buildozer/android/platform/build-arm64-v8a/packages/freetype
+          mkdir -p "$D"
+          for URL in \
+            "https://download-mirror.savannah.gnu.org/releases/freetype/$F" \
+            "https://downloads.sourceforge.net/project/freetype/freetype2/$V/$F" \
+            "https://download.savannah.gnu.org/releases/freetype/$F"; do
+            if curl -fsSL --retry 2 --connect-timeout 20 --max-time 180 -o "$D/$F" "$URL" \
+               && tar -tzf "$D/$F" > /dev/null; then
+              touch "$D/.mark-$F"; echo "freetype desde $URL"; break
+            fi
+            rm -f "$D/$F"
+          done
+          ls -la "$D"
       - name: Compilar APK (debug)
         run: yes | buildozer -v android debug
       # Firma explícita con la clave del repositorio y verificación: garantiza que
