@@ -1066,15 +1066,21 @@ def test_bbch_scale_canes_laterals_and_substages(db, tmp_path):
     assert names[31].startswith("Cañas anuales: 10 %") and names[7].startswith("Brotes laterales")
     assert ph.bbch_label(891, names) == "BBCH 89-1: 10 % de los frutos cosechados"
     assert 15 in codes                                     # estados anteriores se conservan
+    assert codes.index(51) < codes.index(53) < codes.index(55) and 553 not in codes
 
     # Una base con la escala anterior se actualiza sin pisar lo editado por el usuario.
     db.execute("DELETE FROM meta WHERE key='bbch_scale'")
     db.upsert_bbch(65, "Plena floración", "antigua", "", source="base")
     db.upsert_bbch(61, "Mi nombre", "editado", "", source="user")
     db.execute("DELETE FROM bbch_stages WHERE code=893")
+    db.upsert_bbch(553, "Los tallos florales se estiran (capullos juntos)", "", "", source="base")
+    db.add_reference(553, "x", b"\0" * 8, 2, None, None)          # versión con «55-3»
     assert db.refresh_bbch_scale() > 0
     names = db.bbch_names()
     assert names[65].startswith("Final de la floración") and names[61] == "Mi nombre" and 893 in names
+    assert 553 not in names and names[53].startswith("Los tallos florales se estiran (capullos juntos)")
+    assert 553 not in db.reference_counts() and db.reference_counts()[53] == 1
+    db.execute("DELETE FROM ai_references")
 
     # IA: referencias en 89-1 -> sugiere 89-1 (código real) y explica con «89-1».
     clf = PhenologyClassifier(db, HandcraftedExtractor())
@@ -1096,3 +1102,9 @@ def test_bbch_scale_canes_laterals_and_substages(db, tmp_path):
     matrix = open(rep.matrix(w["season"]).path, encoding="utf-8").read()
     assert ">89-1<" in matrix and "≥89-1" in matrix
     assert rep.matrix(w["season"], package="pdf").path.endswith(".pdf")
+
+    # Registros guardados con 553 pasan a 53 al abrir la base.
+    db.update_observation(obs["id"], bbch_code=553, ai_code=553)
+    db._remap_bbch_codes()
+    o = db.query_one("SELECT bbch_code, ai_code FROM observations WHERE id=?", (obs["id"],))
+    assert (o["bbch_code"], o["ai_code"]) == (53, 53)

@@ -276,6 +276,7 @@ class Database:
             self.seed_defaults()
         if shared is None and seed:
             self.refresh_bbch_scale()
+        self._remap_bbch_codes()
 
     # ------------------------------------------------------------------ core
     def close(self) -> None:
@@ -363,6 +364,11 @@ class Database:
         row = ai.query_one("SELECT value FROM meta WHERE key='bbch_scale'")
         if row and int(row["value"] or 0) >= ph.BBCH_SCALE_VERSION:
             return 0
+        # Códigos corregidos (553 -> 53): fuera la entrada base antigua y la memoria de la IA
+        # pasa al código nuevo.
+        for old, new in ph.BBCH_RENAMED.items():
+            ai.execute("DELETE FROM bbch_stages WHERE code=? AND source='base'", (old,))
+            ai.execute("UPDATE ai_references SET bbch_code=? WHERE bbch_code=?", (new, old))
         have = {r["code"]: r for r in ai.query("SELECT code, source FROM bbch_stages")}
         n = 0
         for code, label, desc, kw in ph.BBCH_RUBUS:
@@ -373,6 +379,12 @@ class Database:
         ai.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('bbch_scale', ?)",
                    (str(ph.BBCH_SCALE_VERSION),))
         return n
+
+    def _remap_bbch_codes(self) -> None:
+        """Registros guardados con un código corregido de la escala (553 -> 53)."""
+        for old, new in ph.BBCH_RENAMED.items():
+            for col in ("bbch_code", "ai_code"):
+                self.execute(f"UPDATE observations SET {col}=? WHERE {col}=?", (new, old))
 
     def seed_defaults(self) -> None:
         """Carga variedades y escala BBCH iniciales (solo la primera vez)."""

@@ -40,7 +40,7 @@ BBCH_TABLE: list[tuple[int, str | None, str | None]] = [
     (36, "60 % del crecimiento máximo alcanzado (150 cm)", None),
     (39, "Longitud máxima alcanzada", None),
     (51, "Se hacen visibles los primeros capullos", "Se hacen visibles los primeros capullos"),
-    (553, "Los tallos florales se estiran (capullos juntos)",
+    (53, "Los tallos florales se estiran (capullos juntos)",
      "Los tallos florales se estiran (capullos juntos)"),
     (55, "Los tallos florales se estiran (capullos separados)",
      "Los tallos florales se estiran (capullos separados)"),
@@ -185,7 +185,9 @@ _PREVIOUS: list[tuple[int, str, str, str]] = [
      "fin caida hojas reposo"),
 ]
 
-BBCH_SCALE_VERSION = 2   # sube cuando cambia la escala base (se actualiza en las bases)
+BBCH_SCALE_VERSION = 3   # sube cuando cambia la escala base (se actualiza en las bases)
+# Códigos de la escala base que se corrigieron: antiguo -> nuevo (los registros se pasan solos).
+BBCH_RENAMED = {553: 53}
 
 
 def _scale_value(code: int) -> float:
