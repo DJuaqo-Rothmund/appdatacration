@@ -474,7 +474,7 @@
             right_action_items: [[theme.AI_ICON, lambda x: app.open_ai_lab(), "Asistente IA"], ["cog-outline", lambda x: app.open_settings(), "Ajustes"]]
         WorkspaceBanner:
             id: ws_banner
-            on_release: app.open_workspaces()
+            on_release: app.open_workspaces(app.workspace["profile"] if app.workspace else None)
         ScreenManager:
             id: tabs
             transition: NoTransition()
@@ -528,7 +528,7 @@
                 on_release: root.show("general")
             SegButton:
                 id: var_seg
-                text: "Variedades"
+                text: "Registros"
                 selected: pages.current == "varieties"
                 on_release: root.show("varieties")
         ScreenManager:

@@ -499,9 +499,31 @@ class SectorRow(GlassButton):
     screen = ObjectProperty(None, allownone=True)
 
 
+def unit_dialog(on_saved=None):
+    """Nuevo sector de predio: se guarda como «Equipo de riego n, sector m» con su variedad."""
+    a = app()
+    form = VarietyForm()
+    form.ids.name.hint_text = "Variedad"
+    form.ids.code.hint_text = "Código de la variedad (opcional, va en el nombre de las fotos)"
+
+    def ok(f):
+        try:
+            a.db.save_unit(f.ids.name.text, f.ids.code.text.strip(),
+                           f.sector or None, f.irrigation or None)
+        except ValueError as exc:
+            a.toast(str(exc))
+            return False
+        a.toast(f"Agregado: {ph.unit_name(f.sector, f.irrigation)} · {f.ids.name.text.strip()}")
+        if on_saved:
+            on_saved()
+        a.refresh_home()
+
+    form_dialog("Nuevo sector", form, ok, "AGREGAR")
+
+
 class SectorsScreen(MDScreen):
     """Predio: sectores (variedad + sector + equipo de riego) a muestrear esta semana.
-    Se crean aquí mismo (también siguen en Ajustes › Variedades)."""
+    Se crean aquí mismo (también siguen en Ajustes › Registros)."""
 
     def on_pre_enter(self, *_):
         self.refresh()
@@ -511,7 +533,7 @@ class SectorsScreen(MDScreen):
         ws = a.workspace or {}
         self.ids.bar.title = ws.get("name", "Sectores")
         units = sorted(a.db.list_varieties(),
-                       key=lambda v: (v["sector"] or 99, v["irrigation"] or 99, v["name"].lower()))
+                       key=lambda v: (v["irrigation"] or 99, v["sector"] or 99, v["name"].lower()))
         box = self.ids.rows
         fast_clear(box)
         done = 0
@@ -519,13 +541,11 @@ class SectorsScreen(MDScreen):
             obs = a.db.get_observation(v["id"], a.week["id"])
             code = obs["bbch_code"] if obs else None
             done += code is not None
-            parts = [f"Sector {v['sector']}" if v["sector"] else "Sin sector",
-                     f"Equipo de riego {v['irrigation']}" if v["irrigation"] else ""]
             row = SectorRow(variety_id=v["id"], screen=self, done=code is not None,
-                            badge=ph.location_tag(v) or "—",
-                            title=" · ".join(p for p in parts if p),
-                            subtitle=f"{v['name']} · " + (f"BBCH {ph.code_str(code)} registrado"
-                                                          if code is not None else "sin registro esta semana"))
+                            badge=ph.location_tag(v) or "—", title=v["name"],
+                            subtitle=f"{v.get('cultivar') or 'Sin variedad'} · " + (
+                                f"BBCH {ph.code_str(code)} registrado" if code is not None
+                                else "sin registro esta semana"))
             row.bind(on_release=lambda w: a.open_observation(w.variety_id, a.week["id"]))
             box.add_widget(row)
         self.ids.hint.text = (f"{ph.week_title(a.week)} · {done} de {len(units)} sectores registrados. "
@@ -534,34 +554,7 @@ class SectorsScreen(MDScreen):
                               "(variedad, sector y equipo de riego).")
 
     def add_sector(self):
-        a = app()
-        form = VarietyForm()
-        form.ids.name.hint_text = "Variedad"
-        form.ids.code.hint_text = "Código de la variedad (opcional, va en el nombre de las fotos)"
-
-        def ok(f):
-            if not f.sector:
-                a.toast("Elija el sector")
-                return False
-            try:
-                a.db.add_variety(f.ids.name.text, code=f.ids.code.text.strip(),
-                                 sector=f.sector or None, irrigation=f.irrigation or None)
-            except ValueError as exc:
-                # Misma variedad en otro sector: nombre único con la ubicación.
-                tag = ph.location_tag({"sector": f.sector, "irrigation": f.irrigation})
-                try:
-                    a.db.add_variety(f"{f.ids.name.text.strip()} {tag}", code=f.ids.code.text.strip(),
-                                     sector=f.sector or None, irrigation=f.irrigation or None)
-                except ValueError:
-                    f.ids.name.error = True
-                    f.ids.name.helper_text = str(exc)
-                    f.ids.name.helper_text_mode = "on_error"
-                    return False
-            a.toast("Sector agregado")
-            self.refresh()
-            a.refresh_home()
-
-        form_dialog("Nuevo sector", form, ok, "AGREGAR")
+        unit_dialog(on_saved=self.refresh)
 
     def edit_sector(self, variety_id: int):
         app().open_variety(variety_id)
@@ -790,17 +783,17 @@ class WorkspacesScreen(MDScreen):
                         "tratamientos en Ajustes › Parcelas")
             else:
                 a.toast(f"«{ws['name']}» creado: agregue sus "
-                        + ("variedades en Ajustes › Variedades" if is_id
+                        + ("variedades en Ajustes › Registros" if is_id
                            else "sectores con «+ Nuevo sector»"))
 
         form_dialog("Nuevo ensayo" if is_id else "Nuevo predio", form, ok, "CREAR")
 
 
 class SettingsScreen(MDScreen):
-    """Ajustes con dos pestañas: «General» y «Variedades»."""
+    """Ajustes con dos pestañas: «General» y «Registros»."""
 
     def on_pre_enter(self, *_):
-        self.ids.var_seg.text = "Parcelas" if app().db.is_trial else "Variedades"
+        self.ids.var_seg.text = "Registros"
         self.show(self.ids.pages.current or "general", defer=False)
 
     def on_enter(self, *_):
@@ -849,9 +842,9 @@ class SamplingTab(MDBoxLayout):
             self._rows = {}
             is_predio = (getattr(a, "workspace", None) or {}).get("profile") == "predio"
             box.add_widget(MDLabel(
-                text=("Aún no hay unidades en este predio. Agréguelas en Ajustes › Variedades "
+                text=("Aún no hay sectores en este predio. Agréguelos en Ajustes › Registros "
                       "(variedad, sector y equipo de riego)." if is_predio else
-                      "Aún no hay variedades en este ensayo. Agréguelas en Ajustes › Variedades."),
+                      "Aún no hay variedades en este ensayo. Agréguelas en Ajustes › Registros."),
                 font_style="Body2", adaptive_height=True, halign="center",
                 theme_text_color="Custom", text_color=c(theme.MUTED)))
         elif list(cache) != [r["variety"]["id"] for r in rows]:
@@ -875,6 +868,8 @@ class SamplingTab(MDBoxLayout):
             row.title = v["name"]
             row.subtitle = (obs["bbch_label"] or ph.bbch_label(code, names)) if code is not None \
                 else ("Foto sin estado asignado" if n else "Pendiente de registro")
+            if v.get("cultivar"):   # predio: «Equipo de riego n, sector m» + variedad
+                row.subtitle = f"{v['cultivar']} · {row.subtitle}"
             row.photos, row.photo_tag = n, ("SIN FOTOS" if not n else f"{n} FOTO" + ("S" if n > 1 else ""))
             row.code_tag = f"BBCH {ph.code_str(code)}" if code is not None else "BBCH —"
             row.code_bg, row.code_fg, row.done = bg, fg, code is not None
@@ -1081,7 +1076,7 @@ class VarietiesTab(MDScreen):
         season = a.season
         trial = a.db.is_trial
         self.ids.season_caption.text = (f"{ph.season_title(season)} · toque una "
-                                        f"{'parcela' if trial else 'variedad'} "
+                                        f"{'parcela' if trial else 'sector' if a.db.is_predio else 'variedad'} "
                                         f"para editar sus parámetros biométricos")
         self._trial_card(trial)
         box = self.ids.rows
@@ -1110,6 +1105,8 @@ class VarietiesTab(MDScreen):
                 parts.append(f"proy. {m['projected_yield']:g} {m['projected_yield_unit']}")
             if m["basal_canes"] is not None:
                 parts.append(f"{m['basal_canes']:g} cañas {m['basal_canes_unit']}")
+            if v.get("cultivar"):
+                parts.insert(0, v["cultivar"])
             if v.get("treatment"):
                 t = trts.get(v["treatment"])
                 parts.insert(0, f"{t['label'] if t else 'T' + str(v['treatment'])} · Repetición {v['rep']}")
@@ -1208,6 +1205,9 @@ class VarietiesTab(MDScreen):
         if app().db.is_trial:
             self.trial_size_dialog()
             return
+        if app().db.is_predio:
+            unit_dialog(on_saved=self.refresh)
+            return
         def ok(form):
             try:
                 app().db.add_variety(form.ids.name.text, code=form.ids.code.text.strip(),
@@ -1276,7 +1276,10 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
         self.variety_id = variety_id
         v = a.db.get_variety(variety_id)
         self.ids.bar.title = v["name"]
-        self.ids.name.text = v["name"]
+        self.predio = a.db.is_predio
+        # Predio: se edita la variedad; el nombre («Equipo de riego n, sector m») sale solo.
+        self.ids.name.hint_text = "Variedad" if self.predio else "Nombre de la variedad"
+        self.ids.name.text = (v.get("cultivar") or "") if self.predio else v["name"]
         self.ids.code.text = v["code"] or ""
         self.ids.notes.text = v["notes"] or ""
         self.sector, self.irrigation = v["sector"] or 0, v["irrigation"] or 0
@@ -1296,6 +1299,8 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
             return
         v = {"name": self.ids.name.text, "code": self.ids.code.text,
              "sector": self.sector, "irrigation": self.irrigation}
+        if getattr(self, "predio", False):
+            v["cultivar"] = self.ids.name.text
         a = app()
         g = ph.photo_basename(v, a.week["start_date"], "canopy", trial=a.db.code)
         d = ph.photo_basename(v, a.week["start_date"], "detail", trial=a.db.code)
@@ -1329,9 +1334,18 @@ class VarietyScreen(SectorIrrigationMixin, MDScreen):
             a.toast("El nombre no puede quedar vacío.")
             return
         try:
-            a.db.update_variety(self.variety_id, name=name, code=self.ids.code.text.strip(),
-                                notes=self.ids.notes.text, sector=self.sector or None,
-                                irrigation=self.irrigation or None)
+            if getattr(self, "predio", False):
+                a.db.save_unit(name, self.ids.code.text.strip(), self.sector or None,
+                               self.irrigation or None, self.variety_id)
+                a.db.update_variety(self.variety_id, notes=self.ids.notes.text)
+                name = a.db.get_variety(self.variety_id)["name"]
+            else:
+                a.db.update_variety(self.variety_id, name=name, code=self.ids.code.text.strip(),
+                                    notes=self.ids.notes.text, sector=self.sector or None,
+                                    irrigation=self.irrigation or None)
+        except ValueError as exc:
+            a.toast(str(exc))
+            return
         except Exception:
             a.toast("Ya existe otra variedad con ese nombre.")
             return

@@ -166,8 +166,11 @@ class Workspaces:
         """Base del ensayo/predio, enlazada a la base común."""
         # Solo NV conserva las variedades de ejemplo de una instalación nueva; los ensayos
         # y predios nuevos parten vacíos.
-        return Database(self.path(ws), seed=(ws["code"] == "NV"), shared=self.shared,
-                        code=ws["code"], workspace=dict(ws))
+        db = Database(self.path(ws), seed=(ws["code"] == "NV"), shared=self.shared,
+                      code=ws["code"], workspace=dict(ws))
+        if ws["profile"] == "predio":
+            db.migrate_predio_units()   # nombres «Equipo de riego n, sector m»
+        return db
 
     def last(self) -> dict:
         ws = self.get(self.shared.get_setting("last_workspace") or 0)

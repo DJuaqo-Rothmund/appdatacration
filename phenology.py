@@ -435,6 +435,16 @@ SECTORS = range(1, 11)          # sector del ensayo (opcional)
 IRRIGATION_UNITS = range(1, 5)  # equipo de riego (opcional)
 
 
+def unit_name(sector, irrigation) -> str:
+    """Nombre de una unidad de predio: «Equipo de riego 2, sector 1»."""
+    parts = []
+    if irrigation:
+        parts.append(f"Equipo de riego {int(irrigation)}")
+    if sector:
+        parts.append(("sector" if parts else "Sector") + f" {int(sector)}")
+    return ", ".join(parts)
+
+
 def location_tag(variety: dict) -> str:
     """«S1ER2» (sector 1, equipo de riego 2); se omite lo que no esté definido."""
     out = ""
@@ -465,6 +475,7 @@ def photo_basename(variety: dict, week_start, kind: str, seq: int = 1, legacy: b
     date = week_start.strftime(LEGACY_PHOTO_DATE_FMT if legacy else PHOTO_DATE_FMT)
     if trial:
         date = f"{date}-{trial}"
-    base = f"{date}-{variety_tag(variety.get('name', ''), variety.get('code'))}" \
+    # Predio: la unidad se llama «Equipo de riego 2, sector 1»; la foto lleva la variedad.
+    base = f"{date}-{variety_tag(variety.get('cultivar') or variety.get('name', ''), variety.get('code'))}" \
            f"{location_tag(variety)}{PHOTO_KIND_LETTER.get(kind, 'X')}"
     return base if seq <= 1 else f"{base}-{seq}"

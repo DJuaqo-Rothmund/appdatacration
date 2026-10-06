@@ -1212,3 +1212,34 @@ def test_drive_choose_and_switch_account(db, tmp_path):
             t.join(2)
     assert drive.status()["enabled"] is False
     assert any("oauth2.googleapis.com/revoke" in c[1] for c in calls)
+
+
+def test_predio_units_named_by_irrigation_and_sector(tmp_path):
+    """Predio: «Equipo de riego n, sector m» con la variedad aparte (se puede repetir)."""
+    from workspaces import Workspaces
+    wss = Workspaces(str(tmp_path / "data"))
+    am = wss.by_code("AM")
+    db = wss.open(am)
+    assert db.is_predio
+    a = db.save_unit("Meeker", "MEE", sector=1, irrigation=2)
+    b = db.save_unit("Meeker", "MEE", sector=3, irrigation=2)          # misma variedad
+    c = db.save_unit("Heritage", "HER", sector=1, irrigation=2)        # mismo sector, otra variedad
+    names = {v["id"]: v["name"] for v in db.list_varieties()}
+    assert names[a] == "Equipo de riego 2, sector 1" and names[b] == "Equipo de riego 2, sector 3"
+    assert names[c] == "Equipo de riego 2, sector 1 · Heritage"
+    with pytest.raises(ValueError):
+        db.save_unit("Meeker", "", sector=1, irrigation=2)
+    v = db.get_variety(a)
+    assert v["cultivar"] == "Meeker"
+    assert ph.photo_basename(v, "2026-10-05", "detail", trial="AM") == "20261005-AM-MeeS1ER2D"
+    # Editar: cambia de sector -> cambia el nombre.
+    db.save_unit("Meeker", "MEE", sector=4, irrigation=2, variety_id=a)
+    assert db.get_variety(a)["name"] == "Equipo de riego 2, sector 4"
+    # Unidades de versiones anteriores (nombre = variedad) se renombran al abrir.
+    vid = db.add_variety("Tulameen S5ER1", code="TUL", sector=5, irrigation=1)
+    db.close()
+    db = wss.open(am)
+    v = db.get_variety(vid)
+    assert v["name"] == "Equipo de riego 1, sector 5" and v["cultivar"] == "Tulameen"
+    db.close()
+    wss.close()

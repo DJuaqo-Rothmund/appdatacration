@@ -315,7 +315,8 @@ class Database:
 
     NEW_COLUMNS = {  # v3: columnas opcionales agregadas a tablas existentes
         "varieties": [("sector", "INTEGER"), ("irrigation", "INTEGER"),
-                      ("treatment", "INTEGER"), ("rep", "INTEGER")],   # parcela T1R1…
+                      ("treatment", "INTEGER"), ("rep", "INTEGER"),   # parcela T1R1…
+                      ("cultivar", "TEXT")],                          # predio: variedad de la unidad
         "observations": [("latitude", "REAL"), ("longitude", "REAL"),
                          ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
         "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
@@ -481,7 +482,7 @@ class Database:
 
     def update_variety(self, variety_id: int, **fields: Any) -> None:
         allowed = {"name", "code", "notes", "sort_order", "active", "sector", "irrigation",
-                   "treatment", "rep"}
+                   "treatment", "rep", "cultivar"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
@@ -489,6 +490,56 @@ class Database:
         self.execute(f"UPDATE varieties SET {cols}, updated_at=? WHERE id=?",
                      (*sets.values(), _now(), variety_id))
         self.log("update", "variety", variety_id, json.dumps(sets, ensure_ascii=False))
+
+    # ---------------------------------------------------- predio: unidades
+    @property
+    def is_predio(self) -> bool:
+        return (self.workspace or {}).get("profile") == "predio"
+
+    def save_unit(self, cultivar: str, code: str = "", sector: int | None = None,
+                  irrigation: int | None = None, variety_id: int | None = None) -> int:
+        """Unidad de predio: se llama «Equipo de riego n, sector m» y la variedad va aparte
+        (la misma variedad puede estar en varios sectores y un sector puede repetirse con
+        otra variedad)."""
+        cultivar = (cultivar or "").strip()
+        if not cultivar:
+            raise ValueError("Indique la variedad.")
+        if not sector and not irrigation:
+            raise ValueError("Elija el sector y/o el equipo de riego.")
+        base = ph.unit_name(sector, irrigation)
+        dup = self.query_one(
+            "SELECT id FROM varieties WHERE active=1 AND IFNULL(sector,0)=? AND IFNULL(irrigation,0)=? "
+            "AND lower(IFNULL(cultivar,''))=lower(?) AND id IS NOT ?",
+            (sector or 0, irrigation or 0, cultivar, variety_id))
+        if dup:
+            raise ValueError(f"Ya existe «{base}» con la variedad {cultivar}.")
+        name = base
+        for cand in (base, f"{base} · {cultivar}"):
+            other = self.query_one("SELECT id, active FROM varieties WHERE name=?", (cand,))
+            if other is None or other["id"] == variety_id or (not other["active"] and variety_id is None):
+                name = cand
+                break
+        else:
+            raise ValueError(f"Ya existe «{base}» con la variedad {cultivar}.")
+        if variety_id is None:
+            variety_id = self.add_variety(name, code=code, sector=sector, irrigation=irrigation)
+        self.update_variety(variety_id, name=name, code=code or "", cultivar=cultivar,
+                            sector=sector, irrigation=irrigation, active=1)
+        return variety_id
+
+    def migrate_predio_units(self) -> int:
+        """Unidades creadas antes con el nombre de la variedad -> «Equipo de riego n, sector m»."""
+        import re as _re
+        n = 0
+        for v in self.query("SELECT * FROM varieties WHERE (cultivar IS NULL OR cultivar='') "
+                            "AND (sector IS NOT NULL OR irrigation IS NOT NULL)"):
+            cultivar = _re.sub(r"\s+S\d+(ER\d+)?$|\s+ER\d+$", "", v["name"]).strip() or v["name"]
+            try:
+                self.save_unit(cultivar, v["code"] or "", v["sector"], v["irrigation"], v["id"])
+                n += 1
+            except ValueError:
+                self.update_variety(v["id"], cultivar=cultivar)
+        return n
 
     # --------------------------------------------- tratamientos × repeticiones
     MAX_TREATMENTS, MAX_REPS = 30, 12
