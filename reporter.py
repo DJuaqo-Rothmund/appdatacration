@@ -195,8 +195,8 @@ def compare_chart(series: list[dict], week_min: int, week_max: int,
     def x(wk):
         return pl + (wk - week_min) / (week_max - week_min) * w
 
-    def y(code):
-        return pt + (1 - ph.bbch_value(code) / 99.0) * h
+    def y(code):   # código BBCH o promedio de repeticiones (float)
+        return pt + (1 - ph.scale_pos(code) / 99.0) * h
 
     out = [f'<svg class="cmp" viewBox="0 0 {W} {H}" role="img" '
            f'aria-label="Estado BBCH por semana, comparación entre variedades">']
@@ -219,7 +219,9 @@ def compare_chart(series: list[dict], week_min: int, week_max: int,
                    f'<path d="{d}"/>')
         for wk, c in pts:
             out.append(f'<circle class="dot" cx="{x(wk):.1f}" cy="{y(c):.1f}" r="4">'
-                       f'<title>{escape(s_["name"])} · Semana {wlabel(wk)} · {ph.bbch_label(c)}</title></circle>')
+                       f'<title>{escape(s_["name"])} · Semana {wlabel(wk)} · '
+                       f'{ph.bbch_label(c) if isinstance(c, int) else "BBCH medio " + f"{c:.1f}".replace(".", ",")}'
+                       f'</title></circle>')
         lw, lc = pts[-1]
         out.append(f'<text class="end" x="{x(lw) + 8:.1f}" y="{y(lc) + 4:.1f}">{escape(s_["name"])}</text></g>')
     out.append(f'<line class="xhair" x1="0" x2="0" y1="{pt}" y2="{pt + h}"/>'
@@ -575,6 +577,151 @@ class ReportGenerator:
             data_json=json.dumps([{"variedad": r["variety"]["name"],
                                    "bbch": [c["code"] for c in h["cells"]]}
                                   for r, h in zip(rows, heat)], ensure_ascii=False).replace("</", "<\\/"))
+
+
+    # ------------------------------------- 5. tratamientos × repeticiones
+    def treatments(self, season: int, package: str = "html") -> ReportResult:
+        """Compara tratamientos: promedio de las repeticiones por semana, ANOVA (bloques =
+        repeticiones), letras LSD, hitos fenológicos y mediciones numéricas."""
+        import trial_stats as st
+        from measures_export import as_number
+        trts = self.db.list_treatments()
+        if not trts or not any(t["parcels"] for t in trts):
+            raise ValueError("Este ensayo no tiene tratamientos ni parcelas (Ajustes › Parcelas).")
+        weeks = self.db.list_weeks(season, include_skipped=False)
+        if not weeks:
+            raise ValueError("No hay semanas de muestreo registradas en la temporada.")
+        matrix = self.db.phenology_matrix(season)
+        wl = self._wlabel(season)
+        num = self._num
+        parcels = [p for t in trts for p in t["parcels"]]
+        # Solo el tramo con datos (sin las semanas vacías del inicio y del final).
+        ids = {p["id"] for p in parcels}
+        used = {wn for (vid, wn), o in matrix.items() if vid in ids and o["bbch_code"] is not None}
+        used |= {e["week_number"] for m in self.db.list_measures()
+                 for e in self.db.list_entries(m["id"], season=season) if e["variety_id"] in ids}
+        if used:
+            weeks = [w for w in weeks if min(used) <= w["week_number"] <= max(used)]
+        where = {p["id"]: (p["treatment"], p["rep"]) for p in parcels}
+
+        def bbch_at(p, w):
+            o = matrix.get((p["id"], w["week_number"]))
+            return ph.bbch_value(o["bbch_code"]) if o and o["bbch_code"] is not None else None
+
+        def fmt_p(a):
+            if not a:
+                return "—"
+            p_ = a["p"]
+            return ("< 0,001" if p_ < 0.001 else num(p_, 3)) + f" {a['stars']}"
+
+        # Promedio BBCH por tratamiento y semana (+ ANOVA de cada semana).
+        rows = [{"t": t, "cells": [], "pts": []} for t in trts]
+        tests = []
+        for w in weeks:
+            data = {(p["treatment"], p["rep"]): v for p in parcels for v in [bbch_at(p, w)] if v is not None}
+            a = st.anova(data)
+            for row in rows:
+                vals = [data[(row["t"]["num"], p["rep"])] for p in row["t"]["parcels"]
+                        if (row["t"]["num"], p["rep"]) in data]
+                m, se = st.mean_se(vals)
+                row["cells"].append({"mean": m, "se": se, "n": len(vals), "of": len(row["t"]["parcels"]),
+                                     "text": num(m) if m is not None else "",
+                                     "letter": (a or {}).get("letters", {}).get(row["t"]["num"], "")})
+                if m is not None:
+                    row["pts"].append((w["week_number"], round(float(m), 2)))
+            if a:
+                tests.append({"week": w, "f": num(a["f"], 2) if a["f"] < 1000 else "> 999",
+                              "p": fmt_p(a), "sig": a["stars"], "df": f"{a['df'][0]}; {a['df'][1]}",
+                              "cv": num(a["cv"]) + " %" if a["cv"] is not None else "—",
+                              "lsd": num(a["lsd"], 2) if a["lsd"] is not None else "—"})
+        series = [{"id": r["t"]["num"], "name": r["t"]["label"], "points": r["pts"]} for r in rows]
+        compare = compare_chart(series, weeks[0]["week_number"], weeks[-1]["week_number"],
+                                [r["t"]["num"] for r in rows][:MAX_SELECTED], wl)
+        if compare:
+            compare["raw"]["note"] = "Cada línea: promedio de las repeticiones del tratamiento."
+
+        # Precocidad: diferencia media de cada tratamiento con el promedio de los tratamientos.
+        week_means = {}
+        for i, w in enumerate(weeks):
+            ms = [r["cells"][i]["mean"] for r in rows if r["cells"][i]["mean"] is not None]
+            if len(ms) >= 2:
+                week_means[i] = sum(ms) / len(ms)
+        for r in rows:
+            ds = [r["cells"][i]["mean"] - m for i, m in week_means.items() if r["cells"][i]["mean"] is not None]
+            r["delta"] = round(sum(ds) / len(ds), 1) + 0.0 if ds else None
+            last = next((c for c in reversed(r["cells"]) if c["mean"] is not None), None)
+            r["last"] = num(last["mean"]) if last else "—"
+        ranking = sorted([r for r in rows if r["delta"] is not None], key=lambda r: -r["delta"])
+        max_abs = max([abs(r["delta"]) for r in ranking] or [1.0]) or 1.0
+
+        # Hitos: semana del año en que cada parcela llega al estado; promedio por tratamiento.
+        milestones = []
+        for code, name in MILESTONES:
+            target = ph.bbch_value(code)
+            hit = {}
+            for p in parcels:
+                wk = next((w for w in weeks if (v := bbch_at(p, w)) is not None and v >= target), None)
+                if wk is not None:
+                    hit[(p["treatment"], p["rep"])] = ph.week_of_year(wk)
+            if not hit:
+                continue
+            a = st.anova(hit)
+            cells = []
+            for t in trts:
+                vals = [hit[(t["num"], p["rep"])] for p in t["parcels"] if (t["num"], p["rep"]) in hit]
+                m, _se = st.mean_se(vals)
+                cells.append({"text": (f"S{num(m)}" + (f" {a['letters'].get(t['num'], '')}"
+                                                       if a and a["letters"] else "")) if m is not None else "—",
+                              "n": f"{len(vals)}/{len(t['parcels'])}"})
+            milestones.append({"code": code, "name": name, "cells": cells, "p": fmt_p(a)})
+
+        # Mediciones en planilla: columnas numéricas, promedio por tratamiento y semana.
+        measures = []
+        for m in self.db.list_measures():
+            if m["kind"] != "table":
+                continue
+            entries = [e for e in self.db.list_entries(m["id"], season=season) if e["variety_id"] in where]
+            cols = []
+            for e in entries:
+                cols += [k for k, v in e["data"].items() if k not in cols and as_number(v) is not None]
+            if not cols:
+                continue
+            blocks = []
+            for w in weeks:
+                es = [e for e in entries if e["week_id"] == w["id"]]
+                if not es:
+                    continue
+                trows = {t["num"]: [] for t in trts}
+                p_row = []
+                for col in cols:
+                    per = {}   # submuestras de una misma parcela -> su promedio
+                    for e in es:
+                        v = as_number(e["data"].get(col))
+                        if v is not None:
+                            per.setdefault(where[e["variety_id"]], []).append(float(v))
+                    data = {k: sum(v) / len(v) for k, v in per.items()}
+                    a = st.anova(data)
+                    p_row.append(fmt_p(a))
+                    for t in trts:
+                        mm, se = st.mean_se([v for (tt, _r), v in data.items() if tt == t["num"]])
+                        trows[t["num"]].append(
+                            "—" if mm is None else num(mm, 2) + (f" ± {num(se, 2)}" if se is not None else "")
+                            + (f" {a['letters'].get(t['num'], '')}" if a and a["letters"] else ""))
+                blocks.append({"week": w, "rows": [{"t": t["label"], "values": trows[t["num"]]} for t in trts],
+                               "p": p_row})
+            if blocks:
+                measures.append({"name": m["name"], "columns": cols, "blocks": blocks})
+
+        images = self._images(package, max_side=360)
+        nt, nr = self.db.trial_size()
+        title = "Comparación de tratamientos"
+        return self._render(
+            "treatments.html", f"tratamientos_{season}", "tratamientos", title, images, package,
+            weeks=weeks, rows=rows, tests=tests, compare=compare, ranking=ranking, max_abs=max_abs,
+            milestones=milestones, measures=measures, treatments=trts,
+            heat=self._heatmap(season, weeks, parcels), n_t=nt or len(trts), n_r=nr,
+            subtitle=f"{nt or len(trts)} tratamientos × {nr} repeticiones · {ph.season_title(season)} · "
+                     f"Semanas {ph.week_of_year(weeks[0])}–{ph.week_of_year(weeks[-1])}")
 
 
 # ===========================================================================

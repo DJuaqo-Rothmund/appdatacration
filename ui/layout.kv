@@ -312,6 +312,7 @@
                 selected: pages.current == "general"
                 on_release: root.show("general")
             SegButton:
+                id: var_seg
                 text: "Variedades"
                 selected: pages.current == "varieties"
                 on_release: root.show("varieties")
@@ -622,6 +623,10 @@
             Muted:
                 id: season_caption
             MDBoxLayout:
+                id: trial_box
+                orientation: "vertical"
+                adaptive_height: True
+            MDBoxLayout:
                 id: rows
                 orientation: "vertical"
                 adaptive_height: True
@@ -755,6 +760,7 @@
                     on_release: root.generate("period")
             PaperCard:
                 SectionLabel:
+                    id: variety_title
                     text: "3 · FICHA COMPLETA POR VARIEDAD"
                 Muted:
                     text: "Timeline de brotación a cosecha con datos biométricos y rendimiento."
@@ -774,6 +780,15 @@
                 PrimaryButton:
                     text: "Generar PDF"
                     on_release: root.generate("matrix")
+            PaperCard:
+                id: trial_card
+                SectionLabel:
+                    text: "5 · COMPARACIÓN DE TRATAMIENTOS"
+                Muted:
+                    text: "Promedio de las repeticiones por semana, ANOVA con letras de significancia (LSD), hitos fenológicos y mediciones numéricas por tratamiento."
+                PrimaryButton:
+                    text: "Generar PDF"
+                    on_release: root.generate("treatments")
             SectionLabel:
                 text: "INFORMES GENERADOS"
             MDBoxLayout:
@@ -817,6 +832,52 @@
         icon: "share-variant-outline"
         pos_hint: {"center_y": .5}
         on_release: app.report_actions(root.path, title="Enviar o guardar", info=root.title)
+    MDIconButton:
+        icon: "trash-can-outline"
+        theme_icon_color: "Custom"
+        icon_color: c(theme.MUTED)
+        pos_hint: {"center_y": .5}
+        on_release: root.tab.delete_reports([root.path]) if root.tab else None
+
+<ReportGroup>:
+    orientation: "horizontal"
+    padding: dp(14), dp(4), dp(4), dp(4)
+    radius: [dp(12)]
+    elevation: 0
+    size_hint_y: None
+    height: dp(52)
+    md_bg_color: c(theme.GLASS)
+    line_color: c(theme.GLASS_EDGE)
+    MDIcon:
+        icon: "chevron-down" if root.expanded else "chevron-right"
+        size_hint: None, None
+        size: dp(26), dp(26)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.LEAF_DARK)
+    MDLabel:
+        text: root.title
+        font_style: "Subtitle2"
+        bold: True
+        shorten: True
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.INK)
+    MDLabel:
+        text: root.count
+        font_style: "Caption"
+        halign: "right"
+        size_hint_x: None
+        width: dp(70)
+        pos_hint: {"center_y": .5}
+        theme_text_color: "Custom"
+        text_color: c(theme.MUTED)
+    MDIconButton:
+        icon: "delete-sweep-outline"
+        theme_icon_color: "Custom"
+        icon_color: c(theme.MUTED)
+        pos_hint: {"center_y": .5}
+        on_release: root.tab.delete_reports(root.paths, root.title) if root.tab else None
 
 <SettingsTab>:
     md_bg_color: 0, 0, 0, 0

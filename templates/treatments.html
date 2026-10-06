@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_macros.html" import heatmap, compare_chart %}
+{% block meta %}<span>{{ n_t }} tratamientos</span><span>{{ n_r }} repeticiones</span><span>{{ weeks|length }} semanas</span>{% endblock %}
+{% block content %}
+<h2>Tratamientos</h2>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tratamiento</th><th>Descripción</th><th>Parcelas</th></tr></thead>
+  <tbody>
+  {% for t in treatments %}
+  <tr><td><strong>{{ t.label }}</strong></td><td>{{ t.description or "—" }}</td>
+    <td class="mono small">{{ t.parcels|map(attribute="name")|join(", ") }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Estado BBCH medio por tratamiento</h2>
+<p class="lead">Promedio de las repeticiones en cada semana. Letras distintas = diferencias significativas (LSD de Fisher, p &lt; 0,05), solo en las semanas en que el ANOVA es significativo.</p>
+<div class="scroll-x">
+<table class="heat">
+  <thead><tr><th class="name">Tratamiento</th>{% for w in weeks %}<th class="w">{{ w|wks }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr><td class="name">{{ r.t.label }}</td>
+    {% for c in r.cells %}
+    {% if c.mean is none %}<td class="c na">·</td>
+    {% else %}{% set col = (c.mean|round|int)|seq %}<td class="c" style="background: {{ col[0] }}; color: {{ col[1] }}" title="{{ c.n }}/{{ c.of }} repeticiones">{{ c.text }}{% if c.letter %} <sup>{{ c.letter }}</sup>{% endif %}</td>{% endif %}
+    {% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if compare %}
+<h2>Evolución BBCH por tratamiento</h2>
+{{ compare_chart(compare, "cmp-trt") }}
+{% endif %}
+
+<h2>ANOVA por semana</h2>
+<p class="lead">Bloques completos al azar (repetición = bloque); si faltan parcelas, ANOVA de un factor. ns = sin diferencias; * p &lt; 0,05; ** p &lt; 0,01; *** p &lt; 0,001.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Semana</th><th>F</th><th>gl</th><th>p</th><th>CV</th><th>LSD 5 %</th></tr></thead>
+  <tbody>
+  {% for a in tests %}
+  <tr><td>{{ a.week|wk }}</td><td>{{ a.f }}</td><td>{{ a.df }}</td><td><strong>{{ a.p }}</strong></td><td>{{ a.cv }}</td><td>{{ a.lsd }}</td></tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Se necesitan al menos dos tratamientos con repeticiones registradas en una misma semana.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Precocidad relativa</h2>
+<p class="lead">Diferencia media, en unidades BBCH, entre cada tratamiento y el promedio de todos los tratamientos en las mismas semanas.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>#</th><th>Tratamiento</th><th>Δ BBCH vs. promedio</th><th>Último BBCH medio</th></tr></thead>
+  <tbody>
+  {% for r in ranking %}
+  {% set pct = (r.delta|abs / max_abs * 50) %}
+  <tr>
+    <td class="muted">{{ loop.index }}</td><td><strong>{{ r.t.label }}</strong></td>
+    <td><div class="delta"><div class="track"><span class="mid"></span>
+      {% if r.delta >= 0 %}<span class="fill" style="left:50%; width:{{ pct }}%; background: var(--pos)"></span>
+      {% else %}<span class="fill" style="right:50%; width:{{ pct }}%; background: var(--neg)"></span>{% endif %}
+      </div><span class="val">{{ '%+.1f'|format(r.delta) }}</span></div></td>
+    <td>{{ r.last }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">Sin datos suficientes.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if milestones %}
+<h2>Hitos fenológicos</h2>
+<p class="lead">Semana del año (promedio de las repeticiones) en que cada tratamiento alcanzó el estado; entre paréntesis, cuántas repeticiones lo alcanzaron.</p>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Hito</th>{% for t in treatments %}<th>{{ t.label }}</th>{% endfor %}<th>p</th></tr></thead>
+  <tbody>
+  {% for m in milestones %}
+  <tr><td><strong>{{ m.name }}</strong> <span class="mono small">≥{{ m.code|code }}</span></td>
+    {% for c in m.cells %}<td>{{ c.text }} <span class="muted small">({{ c.n }})</span></td>{% endfor %}
+    <td>{{ m.p }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% for m in measures %}
+<h2>{{ m.name }}</h2>
+<p class="lead">Promedio ± error estándar de las repeticiones (las submuestras de una parcela se promedian primero).</p>
+{% for b in m.blocks %}
+<h3 style="margin: 14px 0 6px;">{{ b.week|wk }}</h3>
+<div class="scroll-x">
+<table>
+  <thead><tr><th>Tratamiento</th>{% for col in m.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in b.rows %}<tr><td><strong>{{ r.t }}</strong></td>{% for v in r["values"] %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}
+  <tr><td class="muted">p (ANOVA)</td>{% for p in b.p %}<td class="muted">{{ p }}</td>{% endfor %}</tr>
+  </tbody>
+</table>
+</div>
+{% endfor %}
+{% endfor %}
+
+<h2>Detalle por parcela</h2>
+<p class="lead">Código BBCH registrado en cada parcela (T = tratamiento, R = repetición).</p>
+{{ heatmap(heat, weeks, "Parcela") }}
+{% endblock %}

@@ -228,8 +228,8 @@ class Report(PDFDoc):
         def X(wk):
             return x0 + (wk - wmin) / (wmax - wmin) * w
 
-        def Y(code):
-            return y0 + (1 - ph.bbch_value(code) / 99) * hh
+        def Y(code):   # código BBCH o promedio de repeticiones (float)
+            return y0 + (1 - ph.scale_pos(code) / 99) * hh
 
         from reporter import BANDS
         for i, (lo, hi, name) in enumerate(BANDS):
@@ -261,25 +261,25 @@ class Report(PDFDoc):
             self.text(min(ex + 5, x0 + w + 4), ey + 2.5, self.fit(name, 64, 7, True), 7, True, color)
             last_y = ey
         self.y += h + 4
-        if any(s_["id"] in sel for s_ in raw["series"]):
-            self.text(M, self.y, "En color: variedades destacadas · en gris: el resto de las variedades.",
-                      7, False, MUTED)
+        if raw.get("note") or any(s_["id"] in sel for s_ in raw["series"]):
+            self.text(M, self.y, raw.get("note") or
+                      "En color: variedades destacadas · en gris: el resto de las variedades.", 7, False, MUTED)
             self.y += 6
 
     def spark(self, x, y, w, h, pts, wmin, wmax, color=OLIVE):
         if not pts:
             return
         wmax = max(wmax, wmin + 1)
-        coords = [(x + (a - wmin) / (wmax - wmin) * w, y + (1 - ph.bbch_value(b) / 99) * h)
+        coords = [(x + (a - wmin) / (wmax - wmin) * w, y + (1 - ph.scale_pos(b) / 99) * h)
                   for a, b in sorted(pts)]
         self.polyline(coords, color, 1.1)
         self.circle(*coords[-1], 1.6, fill=color)
 
     # ---------------------------------------------------------- bloques
-    def heatmap(self, heat: list[dict], weeks: list[dict], per_table: int = 16):
+    def heatmap(self, heat: list[dict], weeks: list[dict], per_table: int = 16, label: str = "Variedad"):
         for i in range(0, max(1, len(weeks)), per_table):
             chunk = weeks[i:i + per_table]
-            headers = ["Variedad"] + [ph.week_short(w) for w in chunk]
+            headers = [label] + [ph.week_short(w) for w in chunk]
             rows = []
             for r in heat:
                 row = [{"text": r["variety"]["name"], "bold": True}]
@@ -621,7 +621,101 @@ def matrix(ctx: dict, names: dict, num=None) -> Report:
     return r
 
 
-RENDERERS = {"weekly.html": weekly, "period.html": period, "variety.html": variety, "matrix.html": matrix}
+def treatments(ctx: dict, names: dict, num=None) -> Report:
+    weeks, rows = ctx["weeks"], ctx["rows"]
+    r = _doc(ctx, [f"{ctx['n_t']} tratamientos", f"{ctx['n_r']} repeticiones", f"{len(weeks)} semanas"],
+             names, num)
+    r.h2("Tratamientos")
+    r.table(["Tratamiento", "Descripción", "Parcelas"],
+            [[{"text": t["label"], "bold": True}, t.get("description") or "—",
+              ", ".join(p["name"] for p in t["parcels"])] for t in ctx["treatments"]], [1.6, 3, 2.4], 8)
+
+    r.h2("Estado BBCH medio por tratamiento",
+         "Promedio de las repeticiones en cada semana. Letras distintas = diferencias significativas "
+         "(LSD de Fisher, p < 0,05), solo en las semanas en que el ANOVA es significativo.")
+    per = 12
+    for i in range(0, max(1, len(weeks)), per):
+        chunk = weeks[i:i + per]
+        trows = []
+        for row in rows:
+            cells = [{"text": row["t"]["label"], "bold": True}]
+            for c in row["cells"][i:i + per]:
+                if c["mean"] is None:
+                    cells.append({"text": "·", "color": MUTED})
+                else:
+                    fill, fg = seq_color(int(round(c["mean"])))
+                    cells.append({"text": c["text"] + (f" {c['letter']}" if c["letter"] else ""),
+                                  "fill": fill, "color": fg, "bold": True})
+            trows.append(cells)
+        r.table(["Tratamiento"] + [ph.week_short(w) for w in chunk], trows, [2.6] + [1] * len(chunk), 7.4,
+                ["left"] + ["center"] * len(chunk))
+    if ctx.get("compare"):
+        r.h2("Evolución BBCH por tratamiento")
+        r.chart(ctx["compare"]["raw"])
+
+    r.h2("ANOVA por semana",
+         "Bloques completos al azar (repetición = bloque); si faltan parcelas, ANOVA de un factor. "
+         "ns = sin diferencias; * p < 0,05; ** p < 0,01; *** p < 0,001.")
+    if ctx["tests"]:
+        r.table(["Semana", "F", "gl", "p", "CV", "LSD 5 %"],
+                [[ph.week_title(a["week"]), a["f"], a["df"], {"text": a["p"], "bold": True}, a["cv"], a["lsd"]]
+                 for a in ctx["tests"]], [2.4, 1, 1, 1.3, 1, 1], 8)
+    else:
+        r.para("Se necesitan al menos dos tratamientos con repeticiones registradas en una misma semana.", 9, MUTED)
+
+    r.h2("Precocidad relativa",
+         "Diferencia media, en unidades BBCH, entre cada tratamiento y el promedio de todos los "
+         "tratamientos en las mismas semanas. Positivo = adelantado; negativo = tardío.")
+    max_abs = ctx.get("max_abs") or 1.0
+
+    def bar(delta):
+        def draw(doc, x, y, w, h):
+            mid, cy = x + (w - 34) / 2 + 2, y + h / 2
+            doc.line(x + 4, cy, x + w - 34, cy, RULE, 3)
+            doc.line(mid, y + 4, mid, y + h - 4, MUTED, .6)
+            span = abs(delta) / max_abs * ((w - 38) / 2)
+            doc.rect(mid if delta >= 0 else mid - span, cy - 3, span, 6,
+                     fill=BERRY if delta >= 0 else "#3e6a8a", radius=2)
+            doc.text(x + w - 4, cy + 3, f"{delta:+.1f}", 8, True, INK, "right")
+        return {"draw": draw, "h": 18}
+
+    if ctx["ranking"]:
+        r.table(["#", "Tratamiento", "Dif. BBCH vs. promedio", "Último BBCH medio"],
+                [[{"text": str(i + 1), "color": MUTED}, {"text": rr["t"]["label"], "bold": True},
+                  bar(rr["delta"]), rr["last"]] for i, rr in enumerate(ctx["ranking"])], [.4, 2.4, 3, 1.4], 8)
+    else:
+        r.para("Sin datos suficientes.", 9, MUTED)
+
+    if ctx["milestones"]:
+        r.h2("Hitos fenológicos",
+             "Semana del año (promedio de las repeticiones) en que cada tratamiento alcanzó el estado; "
+             "entre paréntesis, cuántas repeticiones lo alcanzaron.")
+        trts = ctx["treatments"]
+        r.table(["Hito"] + [t["label"] for t in trts] + ["p"],
+                [[{"text": f"{m['name']} (>= {ph.code_str(m['code'])})", "bold": True}]
+                 + [f"{c['text']} ({c['n']})" for c in m["cells"]] + [m["p"]] for m in ctx["milestones"]],
+                [2.4] + [1.3] * len(trts) + [1.1], 7.4, ["left"] + ["center"] * (len(trts) + 1))
+
+    for m in ctx["measures"]:
+        r.h2(m["name"], "Promedio ± error estándar de las repeticiones (las submuestras de una parcela "
+                        "se promedian primero). Letras: LSD de Fisher, p < 0,05.")
+        for b in m["blocks"]:
+            r.ensure(50)
+            r.y += 10
+            r.text(M, r.y, ph.week_title(b["week"]), 10, True, INK)
+            r.y += 6
+            r.table(["Tratamiento"] + list(m["columns"]),
+                    [[{"text": row["t"], "bold": True}] + list(row["values"]) for row in b["rows"]]
+                    + [[{"text": "p (ANOVA)", "color": MUTED}] + [{"text": p, "color": MUTED} for p in b["p"]]],
+                    [2] + [1.6] * len(m["columns"]), 7.8)
+
+    r.h2("Detalle por parcela", "Código BBCH registrado en cada parcela (T = tratamiento, R = repetición).")
+    r.heatmap(ctx["heat"], weeks, label="Parcela")
+    return r
+
+
+RENDERERS = {"weekly.html": weekly, "period.html": period, "variety.html": variety, "matrix.html": matrix,
+             "treatments.html": treatments}
 
 
 def render(template: str, ctx: dict, names: dict, num=None) -> bytes:

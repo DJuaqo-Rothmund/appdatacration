@@ -105,6 +105,12 @@ CREATE TABLE IF NOT EXISTS variety_attachments (
     captured_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS treatments (     -- ensayos de tratamientos × repeticiones
+    num          INTEGER PRIMARY KEY,         -- 1, 2, 3… (T1, T2, T3…)
+    name         TEXT NOT NULL DEFAULT '',    -- opcional: «Testigo», «N 120 kg/ha»…
+    description  TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS measures (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
@@ -308,7 +314,8 @@ class Database:
             self.conn.commit()
 
     NEW_COLUMNS = {  # v3: columnas opcionales agregadas a tablas existentes
-        "varieties": [("sector", "INTEGER"), ("irrigation", "INTEGER")],
+        "varieties": [("sector", "INTEGER"), ("irrigation", "INTEGER"),
+                      ("treatment", "INTEGER"), ("rep", "INTEGER")],   # parcela T1R1…
         "observations": [("latitude", "REAL"), ("longitude", "REAL"),
                          ("gps_accuracy", "REAL"), ("gps_source", "TEXT")],
         "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
@@ -473,7 +480,8 @@ class Database:
         return cur.lastrowid
 
     def update_variety(self, variety_id: int, **fields: Any) -> None:
-        allowed = {"name", "code", "notes", "sort_order", "active", "sector", "irrigation"}
+        allowed = {"name", "code", "notes", "sort_order", "active", "sector", "irrigation",
+                   "treatment", "rep"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
@@ -481,6 +489,70 @@ class Database:
         self.execute(f"UPDATE varieties SET {cols}, updated_at=? WHERE id=?",
                      (*sets.values(), _now(), variety_id))
         self.log("update", "variety", variety_id, json.dumps(sets, ensure_ascii=False))
+
+    # --------------------------------------------- tratamientos × repeticiones
+    MAX_TREATMENTS, MAX_REPS = 30, 12
+
+    @property
+    def is_trial(self) -> bool:
+        """Ensayo de tratamientos × repeticiones (sus «variedades» son parcelas T1R1…)."""
+        return (self.workspace or {}).get("kind") == "tratamientos" or bool(
+            self.get_setting("trial_treatments", 0))
+
+    def trial_size(self) -> tuple[int, int]:
+        return int(self.get_setting("trial_treatments", 0) or 0), int(self.get_setting("trial_reps", 0) or 0)
+
+    def setup_trial(self, n_treatments: int, n_reps: int) -> dict:
+        """Crea (o ajusta) las parcelas T1R1 … TnRm. Al reducir, las parcelas que sobran se
+        ARCHIVAN (sus registros se conservan); al volver a aumentar, reaparecen."""
+        nt, nr = int(n_treatments), int(n_reps)
+        if not (1 <= nt <= self.MAX_TREATMENTS) or not (1 <= nr <= self.MAX_REPS):
+            raise ValueError(f"Tratamientos: 1 a {self.MAX_TREATMENTS} · repeticiones: 1 a {self.MAX_REPS}.")
+        added = restored = archived = 0
+        for t in range(1, nt + 1):
+            self.execute("INSERT OR IGNORE INTO treatments(num, name) VALUES (?, '')", (t,))
+            for r in range(1, nr + 1):
+                name = f"T{t}R{r}"
+                cur = self.query_one("SELECT * FROM varieties WHERE treatment=? AND rep=?", (t, r)) \
+                    or self.query_one("SELECT * FROM varieties WHERE name=?", (name,))
+                if cur is None:
+                    vid = self.add_variety(name, code=name, sort_order=t * 100 + r, log=False)
+                    added += 1
+                else:
+                    vid = cur["id"]
+                    if not cur["active"]:
+                        restored += 1
+                self.execute("UPDATE varieties SET treatment=?, rep=?, active=1, sort_order=?, "
+                             "updated_at=? WHERE id=?", (t, r, t * 100 + r, _now(), vid))
+        for v in self.query("SELECT id FROM varieties WHERE active=1 AND treatment IS NOT NULL "
+                            "AND (treatment>? OR rep>?)", (nt, nr)):
+            self.execute("UPDATE varieties SET active=0, updated_at=? WHERE id=?", (_now(), v["id"]))
+            archived += 1
+        self.set_setting("trial_treatments", nt)
+        self.set_setting("trial_reps", nr)
+        self.log("update", "trial", None, f"{nt} tratamientos × {nr} repeticiones "
+                                          f"(+{added}, restauradas {restored}, archivadas {archived})")
+        return {"added": added, "restored": restored, "archived": archived}
+
+    @staticmethod
+    def treatment_label(t: dict) -> str:
+        return f"T{t['num']} · {t['name']}" if (t.get("name") or "").strip() else f"T{t['num']}"
+
+    def list_treatments(self) -> list[dict]:
+        nt, _nr = self.trial_size()
+        out = []
+        for t in self.query("SELECT * FROM treatments WHERE num<=? ORDER BY num", (nt,)):
+            t["label"] = self.treatment_label(t)
+            t["parcels"] = self.query("SELECT * FROM varieties WHERE active=1 AND treatment=? "
+                                      "ORDER BY rep", (t["num"],))
+            out.append(t)
+        return out
+
+    def update_treatment(self, num: int, name: str = "", description: str = "") -> None:
+        self.execute("INSERT OR IGNORE INTO treatments(num, name) VALUES (?, '')", (num,))
+        self.execute("UPDATE treatments SET name=?, description=? WHERE num=?",
+                     ((name or "").strip(), (description or "").strip(), num))
+        self.log("update", "treatment", num, (name or "").strip())
 
     def delete_variety(self, variety_id: int, purge: bool = False) -> None:
         """

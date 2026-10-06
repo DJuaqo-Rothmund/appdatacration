@@ -239,6 +239,13 @@ def bbch_value(code: int | None) -> float | None:
     return _scale_value(int(code))
 
 
+def scale_pos(v) -> float | None:
+    """Posición en el eje BBCH: un código (int) -> bbch_value; un promedio (float) tal cual."""
+    if v is None:
+        return None
+    return float(v) if isinstance(v, float) else bbch_value(v)
+
+
 def code_str(code: int | None) -> str:
     """Código para mostrar: 7 -> «07», 65 -> «65», 891 -> «89-1»."""
     if code is None:

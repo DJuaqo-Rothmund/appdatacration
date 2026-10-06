@@ -39,10 +39,10 @@
 {% endif %}
 {%- endmacro %}
 
-{% macro heatmap(heat, weeks) -%}
+{% macro heatmap(heat, weeks, label="Variedad") -%}
 <div class="scroll-x">
 <table class="heat">
-  <thead><tr><th class="name">Variedad</th>
+  <thead><tr><th class="name">{{ label }}</th>
   {% for w in weeks %}<th class="w" title="{{ w.label }}">{{ w|wks }}</th>{% endfor %}</tr></thead>
   <tbody>
   {% for r in heat %}
@@ -124,7 +124,7 @@
       if (v === undefined) return;
       var row = document.createElement("div"); row.className = "t-r" + (slots[id] ? " s" + slots[id] : "");
       var key = document.createElement("span"); key.className = "key"; row.appendChild(key);
-      var val = document.createElement("strong"); val.textContent = "BBCH " + (v < 10 ? "0" : "") + v; row.appendChild(val);
+      var val = document.createElement("strong"); val.textContent = "BBCH " + (v % 1 ? v.toFixed(1).replace(".", ",") : v >= 100 ? Math.floor(v / 10) + "-" + v % 10 : (v < 10 ? "0" : "") + v); row.appendChild(val);
       var nm = document.createElement("span"); nm.textContent = " " + s.name; row.appendChild(nm);
       tip.appendChild(row);
     });

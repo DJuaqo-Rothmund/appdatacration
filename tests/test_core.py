@@ -1108,3 +1108,53 @@ def test_bbch_scale_canes_laterals_and_substages(db, tmp_path):
     db._remap_bbch_codes()
     o = db.query_one("SELECT bbch_code, ai_code FROM observations WHERE id=?", (obs["id"],))
     assert (o["bbch_code"], o["ai_code"]) == (53, 53)
+
+
+def test_treatments_by_replicates_trial_and_report(tmp_path):
+    """Ensayo de tratamientos × repeticiones: parcelas T1R1…, ANOVA, letras e informe PDF."""
+    import trial_stats as st
+    from workspaces import Workspaces
+    wss = Workspaces(str(tmp_path / "data"))
+    ws = wss.create("id", "tratamientos", "Fertilización", "FE")
+    db = wss.open(ws)
+    assert db.is_trial and db.list_varieties() == []
+    assert db.setup_trial(3, 4) == {"added": 12, "restored": 0, "archived": 0}
+    names = [v["name"] for v in db.list_varieties()]
+    assert names[:5] == ["T1R1", "T1R2", "T1R3", "T1R4", "T2R1"] and len(names) == 12
+    db.update_treatment(1, "Testigo", "Sin fertilizar")
+    trts = db.list_treatments()
+    assert [t["label"] for t in trts] == ["T1 · Testigo", "T2", "T3"] and len(trts[0]["parcels"]) == 4
+    # Foto de una parcela: lleva el código del ensayo y la parcela.
+    p = db.list_varieties()[0]
+    assert ph.photo_basename(p, "2026-10-05", "detail", trial="FE").startswith("20261005-FE-T1R1")
+
+    # Reducir archiva (no borra) y aumentar restaura.
+    assert db.setup_trial(2, 4)["archived"] == 4 and len(db.list_varieties()) == 8
+    assert db.setup_trial(3, 4)["restored"] == 4 and len(db.list_varieties()) == 12
+
+    # Datos: T2 adelantado; T1 y T3 parecidos.
+    weeks = [db.current_week(dt.date(2026, 10, 5) + dt.timedelta(days=7 * i)) for i in range(3)]
+    base = {1: [55, 61, 65], 2: [61, 65, 71], 3: [55, 59, 65]}
+    m = db.add_measure("Largo de brotes", "table", ["Largo (cm)", "Obs."])
+    for v in db.list_varieties():
+        for i, w in enumerate(weeks):
+            o = db.get_or_create_observation(v["id"], w["id"])
+            code = base[v["treatment"]][i] + (2 if v["rep"] in (2, 4) and i == 1 else 0)
+            db.update_observation(o["id"], bbch_code=code)
+        for sub in (0, 1):   # dos submuestras por parcela
+            db.add_entry(m, weeks[2]["id"], v["id"],
+                         data={"Largo (cm)": f"{10 * v['treatment'] + v['rep'] * .3 + sub:.1f}".replace(".", ","),
+                               "Obs.": "ok"})
+    a = st.anova({(t, r): float(base[t][0] + r * .1) for t in (1, 2, 3) for r in (1, 2, 3, 4)})
+    assert a["design"] == "bloques completos al azar" and a["p"] < 0.001
+    assert a["letters"][2] == "a" and a["letters"][1] != "a"
+
+    rep = ReportGenerator(db, str(tmp_path / "out"))
+    html = open(rep.treatments(weeks[0]["season"]).path, encoding="utf-8").read()
+    assert "T1 · Testigo" in html and "ANOVA por semana" in html and "Largo de brotes" in html
+    assert "Bloques completos" in html and "<sup>a</sup>" in html and "Inicio floración" in html
+    res = rep.treatments(weeks[0]["season"], package="pdf")
+    assert res.path.endswith(".pdf") and "_FE_" in os.path.basename(res.path)
+    assert open(res.path, "rb").read(5) == b"%PDF-"
+    db.close()
+    wss.close()

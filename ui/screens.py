@@ -482,23 +482,82 @@ class WorkspacesScreen(MDScreen):
         code.bind(text=on_code)
         form.add_widget(name)
         form.add_widget(code)
+        state["kind"] = "variedades" if is_id else "predio"
         if is_id:
-            form.add_widget(MDLabel(
-                text="Tipo: ensayo de variedades. (Los ensayos de tratamientos × repeticiones "
-                     "llegan en la próxima versión.)", font_style="Caption", adaptive_height=True,
-                theme_text_color="Custom", text_color=c(theme.MUTED)))
+            seg = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+            b_var = SegButton(text="Variedades", selected=True)
+            b_trt = SegButton(text="Tratamientos × rep.")
+            seg.add_widget(b_var)
+            seg.add_widget(b_trt)
+            trt = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+            n_t = Factory.Field(hint_text="N.º tratamientos", input_filter="int", text="4")
+            n_r = Factory.Field(hint_text="N.º repeticiones", input_filter="int", text="4")
+            trt.add_widget(n_t)
+            trt.add_widget(n_r)
+            # Alto fijo: el diálogo no cambia de tamaño al elegir el tipo (KivyMD no lo reajusta).
+            info = MDLabel(font_style="Caption", size_hint_y=None, height=dp(48), valign="top",
+                           theme_text_color="Custom", text_color=c(theme.MUTED))
+            info.bind(width=lambda w, v: setattr(w, "text_size", (v, dp(48))))
+            form.add_widget(MDLabel(text="Tipo de ensayo", font_style="Caption", adaptive_height=True,
+                                    theme_text_color="Custom", text_color=c(theme.MUTED)))
+            form.add_widget(seg)
+            form.add_widget(trt)
+            form.add_widget(info)
+
+            def set_kind(kind):
+                state["kind"] = kind
+                b_var.selected, b_trt.selected = kind == "variedades", kind == "tratamientos"
+                trt.disabled = kind != "tratamientos"
+                trt.opacity = 1 if kind == "tratamientos" else .35
+                update_info()
+
+            def update_info(*_):
+                if state["kind"] == "variedades":
+                    info.text = ("Ensayo de variedades: cada variedad se registra por separado y los "
+                                 "informes comparan variedades.")
+                    return
+                try:
+                    t, r = int(n_t.text or 0), int(n_r.text or 0)
+                except ValueError:
+                    t = r = 0
+                info.text = (f"Se crearán {t * r} parcelas: T1R1 … T{t}R{r}. Los informes promedian las "
+                             "repeticiones y comparan los tratamientos (ANOVA)." if t and r else
+                             "Indique cuántos tratamientos y repeticiones tiene el ensayo.")
+
+            b_var.bind(on_release=lambda *_: set_kind("variedades"))
+            b_trt.bind(on_release=lambda *_: set_kind("tratamientos"))
+            n_t.bind(text=update_info)
+            n_r.bind(text=update_info)
+            set_kind("variedades")
 
         def ok(_f):
+            kind = state["kind"]
+            size = None
+            if kind == "tratamientos":
+                try:
+                    size = int(n_t.text or 0), int(n_r.text or 0)
+                except ValueError:
+                    size = (0, 0)
+                from database import Database
+                if not (1 <= size[0] <= Database.MAX_TREATMENTS and 1 <= size[1] <= Database.MAX_REPS):
+                    a.toast(f"Tratamientos: 1 a {Database.MAX_TREATMENTS} · repeticiones: 1 a {Database.MAX_REPS}.")
+                    return False
             try:
-                ws = a.workspaces.create(self.profile, "variedades" if is_id else "predio",
-                                         name.text, code.text)
+                ws = a.workspaces.create(self.profile, kind, name.text, code.text)
             except ValueError as exc:
                 a.toast(str(exc))
                 return False
+            if size:
+                db = a.open_db(ws)
+                db.setup_trial(*size)
             a.open_workspace(ws["id"])
-            a.toast(f"«{ws['name']}» creado: agregue sus "
-                    + ("variedades" if is_id else "unidades (variedad, sector y equipo de riego)")
-                    + " en Ajustes › Variedades")
+            if size:
+                a.toast(f"«{ws['name']}» creado con {size[0] * size[1]} parcelas. Ponga nombre a los "
+                        "tratamientos en Ajustes › Parcelas")
+            else:
+                a.toast(f"«{ws['name']}» creado: agregue sus "
+                        + ("variedades" if is_id else "unidades (variedad, sector y equipo de riego)")
+                        + " en Ajustes › Variedades")
 
         form_dialog("Nuevo ensayo" if is_id else "Nuevo predio", form, ok, "CREAR")
 
@@ -507,6 +566,7 @@ class SettingsScreen(MDScreen):
     """Ajustes con dos pestañas: «General» y «Variedades»."""
 
     def on_pre_enter(self, *_):
+        self.ids.var_seg.text = "Parcelas" if app().db.is_trial else "Variedades"
         self.show(self.ids.pages.current or "general", defer=False)
 
     def on_enter(self, *_):
@@ -785,8 +845,11 @@ class VarietiesTab(MDScreen):
     def refresh(self):
         a = app()
         season = a.season
-        self.ids.season_caption.text = (f"{ph.season_title(season)} · toque una variedad "
+        trial = a.db.is_trial
+        self.ids.season_caption.text = (f"{ph.season_title(season)} · toque una "
+                                        f"{'parcela' if trial else 'variedad'} "
                                         f"para editar sus parámetros biométricos")
+        self._trial_card(trial)
         box = self.ids.rows
         varieties = a.db.list_varieties()
         cache = getattr(self, "_rows", {})
@@ -799,6 +862,7 @@ class VarietiesTab(MDScreen):
                 cache[v["id"]] = row
                 box.add_widget(row)
             self._rows = cache
+        trts = {t["num"]: t for t in a.db.list_treatments()} if trial else {}
         for v in varieties:
             m = a.db.get_metrics(v["id"], season)
             parts = []
@@ -812,6 +876,9 @@ class VarietiesTab(MDScreen):
                 parts.append(f"proy. {m['projected_yield']:g} {m['projected_yield_unit']}")
             if m["basal_canes"] is not None:
                 parts.append(f"{m['basal_canes']:g} cañas {m['basal_canes_unit']}")
+            if v.get("treatment"):
+                t = trts.get(v["treatment"])
+                parts.insert(0, f"{t['label'] if t else 'T' + str(v['treatment'])} · Repetición {v['rep']}")
             n_custom = len(a.db.list_custom_fields(v["id"], season))
             if n_custom:
                 parts.append(f"{n_custom} campo(s) extra")
@@ -822,7 +889,91 @@ class VarietiesTab(MDScreen):
     def open_variety(self, variety_id: int):
         app().open_variety(variety_id)
 
+    # ------------------------------------------- tratamientos × repeticiones
+    def _trial_card(self, trial: bool):
+        from kivy.factory import Factory
+        box = self.ids.trial_box
+        box.clear_widgets()
+        if not trial:
+            return
+        db = app().db
+        nt, nr = db.trial_size()
+        card = Factory.PaperCard()
+        card.add_widget(Factory.SectionLabel(text="TRATAMIENTOS × REPETICIONES"))
+        card.add_widget(Factory.Body(text=f"{nt} tratamientos × {nr} repeticiones = {nt * nr} parcelas"
+                                     if nt else "Aún sin definir"))
+        names = [t["label"] for t in db.list_treatments() if t["name"]]
+        if names:
+            card.add_widget(Factory.Muted(text=" · ".join(names)))
+        row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+        b1 = Factory.GhostButton(icon="grid", text="Cambiar número")
+        b1.bind(on_release=lambda *_: self.trial_size_dialog())
+        b2 = Factory.GhostButton(icon="tag-text-outline", text="Nombres")
+        b2.bind(on_release=lambda *_: self.treatments_dialog())
+        row.add_widget(b1)
+        row.add_widget(b2)
+        card.add_widget(row)
+        box.add_widget(card)
+        box.add_widget(Widget(size_hint_y=None, height=dp(8)))
+
+    def trial_size_dialog(self):
+        from kivy.factory import Factory
+        a = app()
+        nt, nr = a.db.trial_size()
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                           padding=(0, dp(12), 0, 0))
+        row = MDBoxLayout(adaptive_height=True, spacing=dp(8))
+        f_t = Factory.Field(hint_text="N.º tratamientos", input_filter="int", text=str(nt or 4))
+        f_r = Factory.Field(hint_text="N.º repeticiones", input_filter="int", text=str(nr or 4))
+        row.add_widget(f_t)
+        row.add_widget(f_r)
+        form.add_widget(row)
+        form.add_widget(MDLabel(
+            text="Si reduce el número, las parcelas que sobran se archivan con sus registros "
+                 "(no se borra nada); si lo vuelve a aumentar, reaparecen.",
+            font_style="Caption", adaptive_height=True, theme_text_color="Custom", text_color=c(theme.MUTED)))
+
+        def ok(_f):
+            try:
+                res = a.db.setup_trial(int(f_t.text or 0), int(f_r.text or 0))
+            except ValueError as exc:
+                a.toast(str(exc))
+                return False
+            msg = [f"{k} {v}" for k, v in (("nuevas", res["added"]), ("restauradas", res["restored"]),
+                                           ("archivadas", res["archived"])) if v]
+            a.toast("Parcelas: " + (", ".join(msg) if msg else "sin cambios"))
+            self.refresh()
+            a.refresh_home()
+
+        form_dialog("Tratamientos × repeticiones", form, ok)
+
+    def treatments_dialog(self):
+        a = app()
+
+        def edit(t):
+            from kivy.factory import Factory
+            form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                               padding=(0, dp(12), 0, 0))
+            f_n = Factory.Field(hint_text=f"Nombre de T{t['num']} (ej.: Testigo)", text=t["name"] or "")
+            f_d = Factory.Field(hint_text="Descripción (dosis, producto, momento…)",
+                                text=t["description"] or "", multiline=True)
+            form.add_widget(f_n)
+            form.add_widget(f_d)
+
+            def ok(_f):
+                a.db.update_treatment(t["num"], f_n.text, f_d.text)
+                self.refresh()
+
+            form_dialog(f"Tratamiento T{t['num']}", form, ok)
+
+        pick_dialog("Nombres de los tratamientos",
+                    [(t["label"], t["description"] or f"Parcelas: {', '.join(p['name'] for p in t['parcels'])}",
+                      lambda t=t: edit(t)) for t in a.db.list_treatments()])
+
     def add_dialog(self):
+        if app().db.is_trial:
+            self.trial_size_dialog()
+            return
         def ok(form):
             try:
                 app().db.add_variety(form.ids.name.text, code=form.ids.code.text.strip(),
@@ -1698,6 +1849,23 @@ class ReportRow(GlassButton):
     title = StringProperty()
     meta = StringProperty()
     path = StringProperty()
+    tab = ObjectProperty(None, allownone=True)
+
+
+class ReportGroup(GlassButton):
+    """Encabezado desplegable de un grupo de informes (semanales, fichas…)."""
+    title = StringProperty()
+    count = StringProperty()
+    key = StringProperty()
+    expanded = BooleanProperty(False)
+    paths = ListProperty()
+    tab = ObjectProperty(None, allownone=True)
+
+
+# Grupos de la lista de informes: (prefijo del archivo, título)
+REPORT_GROUPS = [("semanal", "Reportes semanales"), ("periodo", "Evolución mensual / rango"),
+                 ("variedad", "Fichas por variedad"), ("matriz", "Matriz comparativa"),
+                 ("tratamientos", "Comparación de tratamientos"), ("", "Mediciones y otros")]
 
 
 class ReportsTab(MDScreen):
@@ -1720,9 +1888,18 @@ class ReportsTab(MDScreen):
         if self.sel_week is None or self.sel_week["season"] != a.season:
             self.sel_week = a.week
             self.sel_from, self.sel_to = weeks[0], a.week
-        if self.sel_variety is None:
+        if self.sel_variety is None or not a.db.get_variety(self.sel_variety["id"]):
             vs = a.db.list_varieties()
             self.sel_variety = vs[0] if vs else None
+        trial = a.db.is_trial
+        card = self.ids.trial_card
+        if trial and card.parent is None:
+            self._card_parent.add_widget(card, index=self._card_index)
+        elif not trial and card.parent is not None:
+            self._card_parent, self._card_index = card.parent, card.parent.children.index(card)
+            card.parent.remove_widget(card)
+        self.ids.variety_title.text = ("3 · FICHA COMPLETA POR PARCELA" if trial
+                                       else "3 · FICHA COMPLETA POR VARIEDAD")
         self._labels()
         self.list_recent()
 
@@ -1809,6 +1986,8 @@ class ReportsTab(MDScreen):
             if not self.sel_variety:
                 return
             job = lambda: r.variety(self.sel_variety["id"], a.season, package)  # noqa: E731
+        elif kind == "treatments":
+            job = lambda: r.treatments(a.season, package)  # noqa: E731
         else:
             job = lambda: r.matrix(a.season, package=package)  # noqa: E731
         a.run_report(job, on_done=lambda _res: self.list_recent())
@@ -1831,14 +2010,68 @@ class ReportsTab(MDScreen):
         files = sorted((os.path.join(folder, f) for f in os.listdir(folder)
                         if f.endswith((".pdf", ".html", ".zip", ".xlsx")) and mine(f)),
                        key=os.path.getmtime, reverse=True)
-        for p in files[:10]:
-            ts = _dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%d-%m-%Y %H:%M")
-            box.add_widget(ReportRow(title=os.path.basename(p), path=p,
-                                     meta=f"{ts} · {max(1, os.path.getsize(p) // 1024)} KB"))
+        groups = {key: [] for key, _t in REPORT_GROUPS}
+        for p in files:
+            name = os.path.basename(p)
+            key = next((k for k, _t in REPORT_GROUPS if k and name.startswith(k + "_")), "")
+            groups[key].append(p)
+        opened = getattr(self, "_opened", set())
+        self._opened = opened
+        trial = a.db.is_trial
+        for key, title in REPORT_GROUPS:
+            items = groups[key]
+            if not items:
+                continue
+            if key == "variedad" and trial:
+                title = "Fichas por parcela"
+            head = ReportGroup(title=title, key=key, paths=items, tab=self, expanded=key in opened,
+                               count=f"{len(items)} {'informe' if len(items) == 1 else 'informes'}")
+            head.bind(on_release=self._toggle_group)
+            box.add_widget(head)
+            if key not in opened:
+                continue
+            for p in items:
+                ts = _dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%d-%m-%Y %H:%M")
+                box.add_widget(ReportRow(title=os.path.basename(p), path=p, tab=self,
+                                         meta=f"{ts} · {max(1, os.path.getsize(p) // 1024)} KB"))
         if not files:
             box.add_widget(MDLabel(text="Aún no se han generado informes.", font_style="Caption",
                                    adaptive_height=True, theme_text_color="Custom",
                                    text_color=c(theme.MUTED)))
+
+    def _toggle_group(self, head):
+        if head.key in self._opened:
+            self._opened.discard(head.key)
+        else:
+            self._opened.add(head.key)
+        self.list_recent()
+
+    def delete_reports(self, paths: list, group: str | None = None):
+        """Borra informes del teléfono (con confirmación). Las copias enviadas o subidas a
+        Drive no se tocan."""
+        a = app()
+        paths = [p for p in paths if os.path.exists(p)]
+        if not paths:
+            return
+        what = (f"«{os.path.basename(paths[0])}»" if len(paths) == 1 and not group
+                else f"los {len(paths)} informes de «{group}»" if group else f"{len(paths)} informes")
+
+        def go():
+            n = 0
+            for p in paths:
+                try:
+                    os.remove(p)
+                    n += 1
+                except OSError:
+                    pass
+            a.db.log("delete", "report", None, ", ".join(os.path.basename(p) for p in paths)[:500])
+            a.toast(f"{n} {'informe eliminado' if n == 1 else 'informes eliminados'}")
+            self.list_recent()
+
+        confirm("Eliminar informes",
+                f"Se eliminará {what} de este teléfono. Las copias que ya envió o subió a "
+                "Google Drive no se borran. Siempre puede volver a generarlos.",
+                [("Eliminar", go)])
 
 
 # ===========================================================================
