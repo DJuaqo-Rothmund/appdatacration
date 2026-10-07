@@ -175,20 +175,27 @@ class Report(PDFDoc):
             self.ensure(0)
         return super().output()
 
+    LOGO = 80   # logo a línea de la app (esquina superior derecha de la primera hoja)
+
     def start(self):
         self.add_page()
+        from platform_utils import resource_path
+        self.image(resource_path("assets", "ui", "logo_line_report.png"), M + CW - self.LOGO, M - 6,
+                   self.LOGO, self.LOGO, mode="contain", max_px=400, bg=None)
+        tw = CW - self.LOGO - 10           # el texto del encabezado no pisa el logo
         self.text(M, self.y + 8, "PHENORUBUS · INFORME FENOLÓGICO", 8, True, OLIVE)
         self.y += 16
-        for line in self.wrap(self.title, CW, 20, True):
+        for line in self.wrap(self.title, tw, 20, True):
             self.y += 22
             self.text(M, self.y, line, 20, True, INK)
         if self.subtitle:
-            for line in self.wrap(self.subtitle, CW, 10.5):
+            for line in self.wrap(self.subtitle, tw, 10.5):
                 self.y += 15
                 self.text(M, self.y, line, 10.5, False, INK2)
         if self.meta:
             self.y += 14
-            self.text(M, self.y, self.fit("  ·  ".join(self.meta), CW, 8.5), 8.5, False, MUTED)
+            self.text(M, self.y, self.fit("  ·  ".join(self.meta), tw, 8.5), 8.5, False, MUTED)
+        self.y = max(self.y, M - 6 + self.LOGO - 8)
         self.y += 10
         self.line(M, self.y, M + CW, self.y, INK, 1.4)
         self.y += 8
