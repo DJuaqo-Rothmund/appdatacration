@@ -294,18 +294,66 @@ def bbch_dialog(title: str, db, callback, extra: list | None = None, current: in
     return dialog
 
 
+class RoundThumb(Widget):
+    """Miniatura con esquinas redondeadas dibujada con UNA instrucción (RoundedRectangle
+    con textura, recortada «cover»). FitImage de KivyMD usa un stencil por imagen, que en
+    GPUs modestas se paga en cada cuadro al desplazar listas."""
+    source = StringProperty("")
+    radius = NumericProperty(dp(10))
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        from kivy.graphics import Color, RoundedRectangle
+        with self.canvas:
+            self._bg = Color(*c(theme.LEAF_SOFT, .8))
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[self.radius])
+        self.bind(pos=self._layout, size=self._layout, source=self._load)
+        self._tex = None
+        self._load()
+
+    def _load(self, *_):
+        self._tex = None
+        if self.source:
+            try:
+                from kivy.core.image import Image as CoreImage
+                self._tex = CoreImage(self.source).texture   # Kivy guarda la textura en caché
+            except Exception:  # noqa: BLE001 - archivo dañado: queda el fondo suave
+                self._tex = None
+        self._bg.rgba = (1, 1, 1, 1) if self._tex else c(theme.LEAF_SOFT, .8)
+        self._layout()
+
+    def _layout(self, *_):
+        r = self._rect
+        r.pos, r.size, r.radius = self.pos, self.size, [self.radius]
+        tex = self._tex
+        if tex is None or not self.width or not self.height:
+            r.texture = None
+            return
+        tw, th = tex.size
+        scale = max(self.width / tw, self.height / th)
+        cw, ch = self.width / scale, self.height / scale          # recorte centrado
+        r.texture = tex.get_region((tw - cw) / 2, (th - ch) / 2, cw, ch)
+
+
 def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outline"):
-    """Marcador inmediato; la miniatura se genera en segundo plano y lo reemplaza."""
-    box = GlassCard(md_bg_color=c(theme.LEAF_SOFT, .8), line_color=c("#FFFFFF", .9),
-                    radius=[dp(10)])
-    box.add_widget(MDIcon(icon=icon, halign="center", theme_text_color="Custom",
-                          text_color=c(theme.LEAF)))
+    """Marcador inmediato (fondo suave con ícono); la miniatura se genera en segundo plano."""
+    thumb = RoundThumb()
+    from kivy.uix.label import Label
+    from kivymd.icon_definitions import md_icons
+    from kivymd import fonts_path
+    mark = Label(text=md_icons.get(icon, ""), font_name=os.path.join(fonts_path, "materialdesignicons-webfont.ttf"),
+                 font_size=dp(24), color=c(theme.LEAF))
+    thumb.add_widget(mark)
+    thumb.bind(pos=lambda w, v: setattr(mark, "center", w.center), size=lambda w, v: setattr(mark, "center", w.center))
+
+    def ready(src):
+        if src:
+            thumb.remove_widget(mark)
+            thumb.source = src
+
     if path and os.path.exists(path):
-        def ready(src):
-            fast_clear(box)
-            box.add_widget(FitImage(source=src, radius=[dp(8)]))
         app().thumb_async(path, size, ready)
-    return box
+    return thumb
 
 
 def text_dialog(title: str, lines: list[str], highlight: str = "", actions=(), small=False):
@@ -505,8 +553,10 @@ class StartScreen(MDScreen):
         from kivy.animation import Animation
         if getattr(self, "_breath", None):
             return
-        anim = Animation(glow_level=1, d=1.6, t="in_out_sine") + Animation(glow_level=.45, d=1.6, t="in_out_sine")
-        anim.repeat = True
+        # Tres «respiraciones» y queda quieto: una animación sin fin obliga a redibujar la
+        # pantalla completa 60 veces por segundo y resta fluidez al resto.
+        step = Animation(glow_level=1, d=1.4, t="in_out_sine") + Animation(glow_level=.5, d=1.4, t="in_out_sine")
+        anim = step + step + step + Animation(glow_level=.8, d=.8)
         self._breath = anim
         anim.start(self.ids.ic_ai)
 

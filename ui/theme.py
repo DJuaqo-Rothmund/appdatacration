@@ -127,3 +127,39 @@ def apply(theme_cls) -> None:
     theme_cls.primary_hue = "500"
     theme_cls.accent_palette = "Pink"
     theme_cls.material_style = "M2"
+
+
+# ---------------------------------------------------------------------------
+# Rendimiento: KivyMD 1.2 registra CADA widget en el tema con `theme_cls.bind(...)`.
+# `bind` de Kivy compara contra todos los registros anteriores (también los de widgets
+# ya destruidos), así que crear una pantalla se volvía más lento cuanto más se usaba
+# la app. `fbind(..., ref=True)` registra lo mismo (referencia débil) sin esa búsqueda,
+# y `purge_theme_observers` borra cada tanto los registros de widgets que ya no existen.
+# ---------------------------------------------------------------------------
+def speed_up_theme_bindings() -> None:
+    from kivymd.theming import ThemeManager
+    if getattr(ThemeManager, "_fast_bind", False):
+        return
+
+    def bind(self, **kwargs):
+        for name, callback in kwargs.items():
+            if self.fbind(name, callback, ref=True) == 0:   # nombre desconocido: como antes
+                raise KeyError(name)
+
+    ThemeManager.bind = bind
+    ThemeManager._fast_bind = True
+
+
+def purge_theme_observers(theme_cls) -> int:
+    """Quita los observadores muertos (widgets destruidos) de las propiedades del tema."""
+    removed = 0
+    for name in theme_cls.properties():
+        try:
+            observers = theme_cls.get_property_observers(name, args=True)
+        except Exception:  # noqa: BLE001
+            continue
+        for callback, _largs, _kwargs, is_ref, uid in observers:
+            if is_ref and getattr(callback, "is_dead", lambda: False)():
+                theme_cls.unbind_uid(name, uid)
+                removed += 1
+    return removed

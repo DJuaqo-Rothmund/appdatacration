@@ -24,6 +24,8 @@ from kivy.config import Config  # noqa: E402
 # costo de relleno en GPUs modestas; en pantallas de alta densidad no se nota).
 Config.set("graphics", "multisamples", "0")
 Config.set("kivy", "exit_on_escape", "0")
+# Menos registro: cada línea de log de Kivy pasa por logcat y cuesta en teléfonos básicos.
+Config.set("kivy", "log_level", "warning")
 
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
@@ -36,7 +38,7 @@ from kivymd.uix.screenmanager import MDScreenManager  # noqa: E402
 from kivymd.uix.snackbar import MDSnackbar  # noqa: E402
 from kivy.uix.floatlayout import FloatLayout  # noqa: E402
 from kivy.uix.image import Image  # noqa: E402
-from kivy.uix.screenmanager import FadeTransition  # noqa: E402
+from kivy.uix.screenmanager import FadeTransition, NoTransition  # noqa: E402
 
 from ui import theme  # noqa: E402
 
@@ -65,6 +67,8 @@ class FenoRubusApp(MDApp):
         import crashguard
         crashguard.install(notify=lambda text: self.toast(text))
         theme.apply(self.theme_cls)
+        theme.speed_up_theme_bindings()   # crear pantallas no se vuelve más lento con el uso
+        Clock.schedule_interval(lambda *_: theme.purge_theme_observers(self.theme_cls), 20)
         if platform not in ("android", "ios"):
             Window.size = (412, 860)
         # Ensayos y predios: cada uno con su base; la común guarda IA, escala y ajustes.
@@ -82,7 +86,9 @@ class FenoRubusApp(MDApp):
 
         Builder.load_file(resource_path("ui", "layout.kv"))
         # Fundido corto: con pantallas translúcidas un deslizamiento superpondría contenidos.
-        self.sm = MDScreenManager(transition=FadeTransition(duration=0.14))
+        # Cambio de pantalla instantáneo: un fundido dibuja las DOS pantallas en texturas
+        # intermedias en cada cuadro, lo más costoso para GPUs modestas.
+        self.sm = MDScreenManager(transition=NoTransition())
         # Primero solo la pantalla de inicio (logo): el primer cuadro aparece de inmediato
         # y la pantalla principal se construye detrás, en on_start.
         self.sm.add_widget(SplashScreen(name="splash"))
@@ -205,12 +211,16 @@ class FenoRubusApp(MDApp):
             self.__dict__.pop(name, None)
         self.week = self.db.current_week()
         self.season = self.week["season"]
-        for name in list(self.sm.screen_names):
-            if name not in ("workspaces", "splash", "start"):
-                self.sm.remove_widget(self.sm.get_screen(name))
+        # Las pantallas ya construidas se REUTILIZAN (rehacerlas tomaba más de 1 s en
+        # teléfonos básicos): cada una vuelve a leer la base al mostrarse; solo se olvidan
+        # las selecciones que eran del ensayo anterior.
         self._history = []
-        self.home = HomeScreen(name="home")
-        self.sm.add_widget(self.home)
+        if self.home is None:
+            self.home = HomeScreen(name="home")
+            self.sm.add_widget(self.home)
+        ids = self.home.ids
+        ids.reports.sel_week = ids.reports.sel_variety = ids.reports.sel_month = None
+        ids.preview._season = None
         self.home.refresh_current()
         if target == "sectors":   # predio: lista de sectores; «atrás» vuelve a la lista de predios
             self.sectors
@@ -245,10 +255,10 @@ class FenoRubusApp(MDApp):
         Clock.schedule_once(self._leave_splash, wait)
 
     def _leave_splash(self, *_):
-        self.sm.transition = FadeTransition(duration=0.35)
+        self.sm.transition = FadeTransition(duration=0.25)   # solo logo -> inicio
         self.start   # la pantalla de inicio es siempre lo primero al abrir la app
         self.sm.current = "start"
-        self.sm.transition = FadeTransition(duration=0.14)
+        Clock.schedule_once(lambda *_: setattr(self.sm, "transition", NoTransition()), 0.3)
         # Libera la pantalla de inicio (y su textura) cuando termina el fundido.
         Clock.schedule_once(lambda *_: self.sm.remove_widget(self.sm.get_screen("splash")), 0.6)
         request_runtime_permissions()
