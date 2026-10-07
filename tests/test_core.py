@@ -941,7 +941,7 @@ def test_pdf_reports_all_kinds_and_photo_mode(db, tmp_path):
 
     def jpeg_count(path):
         xo = pypdf.PdfReader(path).pages[0]["/Resources"].get("/XObject") or {}
-        return len(xo)
+        return len(xo) - 1      # sin contar el logo de la app (primera hoja)
 
     full = jpeg_count(paths[0])
     rep.photo_mode = "detail"
