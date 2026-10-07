@@ -71,9 +71,109 @@ class Report(PDFDoc):
                   False, MUTED)
         self.text(M + CW, y, f"Página {n} de {total}", 7.5, False, MUTED, "right")
 
+    # ------------------------------------------------- bloques sin cortar
+    # Cada sección se mide primero «en seco» (sin dibujar) y, si no cabe en lo que queda
+    # de la hoja pero sí en una hoja completa, pasa entera a la siguiente. Los títulos
+    # (h2) quedan pendientes y se dibujan junto con el primer contenido de su sección.
+    _dry = 0
+    _pending = None          # (título, bajada) de un h2 aún no dibujado
+    _heading_now = False
+
+    FULL = BOTTOM - (M + 10)   # alto útil de una hoja que no es la primera
+
+    def add_page(self):
+        if self._dry:
+            return
+        super().add_page()
+
+    def _heading_h(self) -> float:
+        if not self._pending:
+            return 0
+        _t, lead = self._pending
+        h = 32
+        if lead:
+            h += len(self.wrap(lead, CW, 8.8)) * 8.8 * 1.32 + 4
+        return h
+
+    def _draw_heading(self):
+        text, lead = self._pending
+        self._pending = None
+        self._heading_now = True
+        try:
+            self.y += 18
+            self.text(M, self.y, text, 13.5, True, INK)
+            self.y += 6
+            self.line(M, self.y, M + CW, self.y, RULE, .8)
+            self.y += 8
+            if lead:
+                self.para(lead, 8.8, INK2)
+                self.y += 4
+        finally:
+            self._heading_now = False
+
     def ensure(self, h: float):
+        if self._dry:
+            return
+        if self._pending and not self._heading_now:
+            if self.y + self._heading_h() + h > BOTTOM:   # el título baja con su contenido
+                self.add_page()
+            self._draw_heading()
         if self.y + h > BOTTOM:
             self.add_page()
+
+    def measure(self, fn) -> float:
+        """Alto que ocuparía fn() (sin dibujar nada)."""
+        y, pending = self.y, self._pending
+        self._pending = None
+        self._dry += 1
+        self.y = 0
+        try:
+            fn()
+            return self.y
+        finally:
+            self._dry -= 1
+            self.y, self._pending = y, pending
+
+    def keep(self, fn):
+        """Dibuja fn() sin cortarlo entre hojas si cabe en una hoja completa."""
+        if self._dry:
+            return fn()
+        h = self.measure(fn)
+        self.ensure(min(h, self.FULL - self._heading_h()))
+        return fn()
+
+    # Primitivas: no dibujan nada mientras se mide.
+    def text(self, *a, **k):
+        if not self._dry:
+            super().text(*a, **k)
+
+    def rect(self, *a, **k):
+        if not self._dry:
+            super().rect(*a, **k)
+
+    def line(self, *a, **k):
+        if not self._dry:
+            super().line(*a, **k)
+
+    def polyline(self, *a, **k):
+        if not self._dry:
+            super().polyline(*a, **k)
+
+    def circle(self, *a, **k):
+        if not self._dry:
+            super().circle(*a, **k)
+
+    def image(self, *a, **k):
+        return True if self._dry else super().image(*a, **k)
+
+    def link(self, *a, **k):
+        if not self._dry:
+            super().link(*a, **k)
+
+    def output(self) -> bytes:
+        if self._pending:            # título sin contenido al final
+            self.ensure(0)
+        return super().output()
 
     def start(self):
         self.add_page()
@@ -95,15 +195,9 @@ class Report(PDFDoc):
 
     # ----------------------------------------------------------- texto
     def h2(self, text: str, lead: str | None = None):
-        self.ensure(64)
-        self.y += 18
-        self.text(M, self.y, text, 13.5, True, INK)
-        self.y += 6
-        self.line(M, self.y, M + CW, self.y, RULE, .8)
-        self.y += 8
-        if lead:
-            self.para(lead, 8.8, INK2)
-            self.y += 4
+        if self._pending:            # dos títulos seguidos: el primero va sin contenido
+            self.ensure(0)
+        self._pending = (text, lead)  # se dibuja junto con el primer contenido
 
     def para(self, text: str, size: float = 9, color=INK, bold: bool = False, x: float = M,
              w: float = CW, leading: float = 1.32):
@@ -172,12 +266,22 @@ class Report(PDFDoc):
             self.y += h
 
         head = [cell({"text": h} if isinstance(h, str) else h) for h in headers]
-        self.ensure(row_h(head, True) + 18)
+        body = [[cell(v) for v in r] for r in rows]
+        hh = row_h(head, True)
+        heights = [row_h(cells) for cells in body]
+        total = hh + sum(heights) + 6
+        # Entera en una hoja si cabe; si es más larga que una hoja, empieza aquí (con al
+        # menos el encabezado y unas filas) y se corta solo ENTRE filas.
+        if total <= self.FULL - self._heading_h():
+            self.ensure(total)
+        else:
+            self.ensure(hh + sum(heights[:3]) + 6)
         draw_row(head, True)
-        for r in rows:
-            cells = [cell(v) for v in r]
-            if self.y + row_h(cells) > BOTTOM:
+        for cells, h in zip(body, heights):
+            if not self._dry and self.y + h > BOTTOM:
                 self.add_page()
+                self.text(M, self.y + 7, "(continuación)", 7, False, MUTED)
+                self.y += 11
                 draw_row(head, True)
             draw_row(cells)
         self.y += 6
@@ -198,11 +302,17 @@ class Report(PDFDoc):
         gap = 8
         w = (CW - gap * (cols - 1)) / cols
         h = w * ratio
+        rows = []
         for i in range(0, len(items), cols):
             row = items[i:i + cols]
             caps = [self.wrap(it.get("caption") or "", w, size)[:2] for it in row]
             extra = max(len(c) for c in caps) * size * 1.25 + (11 if any(it.get("when") for it in row) else 0)
-            self.ensure(h + extra + 10)
+            rows.append((row, caps, extra))
+        total = sum(h + extra + 10 for _r, _c, extra in rows)
+        if total <= self.FULL - self._heading_h():
+            self.ensure(total)          # la galería completa en una sola hoja
+        for row, caps, extra in rows:
+            self.ensure(h + extra + 10)   # si es más larga que una hoja: corta entre filas
             for j, it in enumerate(row):
                 x = M + j * (w + gap)
                 self.photo(it.get("src"), x, self.y, w, h)
@@ -294,6 +404,10 @@ class Report(PDFDoc):
 
     def measures(self, measures: list[dict], show_week: bool = False, show_variety: bool = True):
         for m in measures:
+            self.keep(lambda m=m: self._measure(m, show_week, show_variety))
+
+    def _measure(self, m: dict, show_week: bool, show_variety: bool):
+        if True:
             self.ensure(40)
             self.y += 10
             self.text(M, self.y, m["name"], 11, True, INK)
@@ -362,13 +476,9 @@ def weekly(ctx: dict, names: dict, num=None) -> Report:
     data_cards = []
     pw = (CW - 24 - 10) / 2
     ph_h = pw * .6
-    for i, c in enumerate(cards):
+    def draw_card(i, c):
         photos = [(k, lab) for k, lab in (("canopy", "Canopia"), ("detail", "Detalle")) if c["img"][k]]
-        notes_h = len(r.wrap(c.get("notes") or "", CW - 24, 8.6)) * 11.4 if c.get("notes") else 0
         att = c.get("attachments") or []
-        est = 30 + (ph_h + 16 if photos else 22) + 24 + (12 if c.get("ai_code") is not None else 0) \
-            + (12 if c.get("geo") else 0) + notes_h + (110 if att else 0) + (56 if c.get("extras") else 0)
-        r.ensure(min(est, BOTTOM - M - 20))
         top, page = r.y, r._page
         x = M + 12
         r.y += 18
@@ -402,6 +512,10 @@ def weekly(ctx: dict, names: dict, num=None) -> Report:
         if r._page == page:      # marco de la tarjeta (si no se cortó entre hojas)
             r.rect(M, top, CW, r.y - top, stroke=RULE, lw=.8, radius=6)
         r.y += 10
+        return names_map
+
+    for i, c in enumerate(cards):
+        names_map = r.keep(lambda i=i, c=c: draw_card(i, c))   # la tarjeta entera en una hoja
         data_cards.append({"name": c["variety"]["name"], "code": c["variety"].get("code") or "",
                            "bbch": c["code"], "notes": c.get("notes") or "", "photos": names_map})
     if ctx.get("measures"):
@@ -449,7 +563,7 @@ def period(ctx: dict, names: dict, num=None) -> Report:
     cols, gap = 6, 6
     w = (CW - gap * (cols - 1)) / cols
     h = w * .75
-    for s in ctx["strips"]:
+    def draw_strip(s):
         r.ensure(30 + h + 24)
         r.y += 14
         r.text(M, r.y, s["variety"]["name"], 11, True, INK)
@@ -471,6 +585,9 @@ def period(ctx: dict, names: dict, num=None) -> Report:
                 r.text(x, r.y + h + 18, f"BBCH {ph.code_str(t['code'])}" if t["code"] is not None else "—", 7.4,
                        True, INK if t["code"] is not None else MUTED)
             r.y += h + 24
+
+    for s in ctx["strips"]:
+        r.keep(lambda s=s: draw_strip(s))   # la franja de cada variedad sin cortar
     return r
 
 
@@ -527,9 +644,8 @@ def variety(ctx: dict, names: dict, num=None) -> Report:
     lw = 92
     pw = (CW - lw - 12 - 8) / 2
     ph_h = pw * .72
-    for t in timeline:
+    def draw_week(t):
         photos = [(k, lab) for k, lab in (("canopy", "Canopia"), ("detail", "Detalle")) if t["img"][k]]
-        r.ensure((ph_h + 14 if photos else 20) + 46)
         top = r.y + 4
         r.y = top
         r.text(M, top + 10, ph.week_title(t["start_date"]), 8.5, True, INK)
@@ -548,6 +664,9 @@ def variety(ctx: dict, names: dict, num=None) -> Report:
             _gallery_at(r, t["attachments"], x, CW - lw - 12, cols=3)
         r.y += 6
         r.line(M, r.y, M + CW, r.y, RULE, .5)
+
+    for t in timeline:
+        r.keep(lambda t=t: draw_week(t))   # cada semana completa en una hoja
     if not timeline:
         r.para("Sin registros.", 9, MUTED)
     if ctx.get("measures"):
@@ -604,7 +723,7 @@ def matrix(ctx: dict, names: dict, num=None) -> Report:
     cols, gap = 8, 5
     w = (CW - gap * (cols - 1)) / cols
     h = w * .75
-    for rr in rows:
+    def draw_gallery(rr):
         r.ensure(16 + h + 14)
         r.y += 12
         r.text(M, r.y, rr["variety"]["name"], 9.5, True, INK)
@@ -618,6 +737,9 @@ def matrix(ctx: dict, names: dict, num=None) -> Report:
                 cap = ph.week_short(g["week"]) + (f" · {ph.code_str(g['code'])}" if g["code"] is not None else "")
                 r.text(x, r.y + h + 8, cap, 6.6, False, MUTED)
             r.y += h + 13
+
+    for rr in rows:
+        r.keep(lambda rr=rr: draw_gallery(rr))
     return r
 
 
@@ -699,7 +821,7 @@ def treatments(ctx: dict, names: dict, num=None) -> Report:
     for m in ctx["measures"]:
         r.h2(m["name"], "Promedio ± error estándar de las repeticiones (las submuestras de una parcela "
                         "se promedian primero). Letras: LSD de Fisher, p < 0,05.")
-        for b in m["blocks"]:
+        def block(b, m=m):
             r.ensure(50)
             r.y += 10
             r.text(M, r.y, ph.week_title(b["week"]), 10, True, INK)
@@ -708,6 +830,9 @@ def treatments(ctx: dict, names: dict, num=None) -> Report:
                     [[{"text": row["t"], "bold": True}] + list(row["values"]) for row in b["rows"]]
                     + [[{"text": "p (ANOVA)", "color": MUTED}] + [{"text": p, "color": MUTED} for p in b["p"]]],
                     [2] + [1.6] * len(m["columns"]), 7.8)
+
+        for b in m["blocks"]:
+            r.keep(lambda b=b: block(b))
 
     r.h2("Detalle por parcela", "Código BBCH registrado en cada parcela (T = tratamiento, R = repetición).")
     r.heatmap(ctx["heat"], weeks, label="Parcela")
