@@ -1261,3 +1261,30 @@ def test_drive_missing_files_do_not_block_progress(db, tmp_path):
     assert drive._skip_missing() == 1
     st = drive.status()
     assert (st["done"], st["errors"], st["pending"]) == (1, 0, 0)    # 1 de 1: completo
+
+
+def test_variety_catalog_separate_profiles_and_trial_variety(tmp_path):
+    """Catálogo de variedades por perfil (I+D / Predio); nunca entran «Código n» ni T1R1."""
+    import catalog
+    from workspaces import Workspaces
+    wss = Workspaces(str(tmp_path / "data"))
+    sh = wss.shared
+    assert not catalog.is_real_variety("Código 11") and not catalog.is_real_variety("código n° 24")
+    assert not catalog.is_real_variety("T1R2") and catalog.is_real_variety("Meeker")
+    assert catalog.add(sh, "predio", "Heritage", "HER")
+    assert not catalog.add(sh, "predio", "Código 31")
+    assert catalog.add(sh, "id", "Meeker", "MEE")
+    catalog.add(sh, "predio", "heritage", "HE2")          # mismo nombre: actualiza el código
+    assert catalog.entries(sh, "predio") == [{"name": "Heritage", "code": "HE2"}]
+    ids = [e["name"] for e in catalog.entries(sh, "id")]
+    assert "Meeker" in ids and not any(n.lower().startswith("código") for n in ids)
+    # Tratamientos: variedad del ensayo por defecto y otra en un tratamiento.
+    ws = wss.create("id", "tratamientos", "Ensayo N", "EN")
+    db = wss.open(ws)
+    db.setup_trial(2, 2)
+    db.set_setting("trial_cultivar", "Meeker")
+    db.update_treatment(2, "Alto N", "", "Heritage")
+    vs = {t["num"]: t["variety"] for t in db.list_treatments()}
+    assert vs == {1: "Meeker", 2: "Heritage"}
+    db.close()
+    wss.close()

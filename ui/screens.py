@@ -294,6 +294,89 @@ def bbch_dialog(title: str, db, callback, extra: list | None = None, current: in
     return dialog
 
 
+def current_profile() -> str:
+    return (getattr(app(), "workspace", None) or {}).get("profile") or "id"
+
+
+def pick_catalog(on_pick, profile: str | None = None, allow_none: str = ""):
+    """Desplegable con el catálogo de variedades (I+D o Predio) + «Nueva variedad…».
+    on_pick(nombre, código). allow_none: texto de la opción «sin variedad» (si se ofrece)."""
+    import catalog
+    a = app()
+    profile = profile or current_profile()
+    shared = a.workspaces.shared
+
+    def new():
+        from kivy.factory import Factory
+        form = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8),
+                           padding=(0, dp(8), 0, 0))
+        f_name = Factory.Field(hint_text="Nombre de la variedad (ej.: Meeker)")
+        f_code = Factory.Field(hint_text="Código para las fotos (opcional, ej.: MEE)")
+        form.add_widget(f_name)
+        form.add_widget(f_code)
+
+        def ok(_f):
+            if not catalog.add(shared, profile, f_name.text, f_code.text.upper()):
+                a.toast("Escriba el nombre real de la variedad (no «Código n»).")
+                return False
+            on_pick(f_name.text.strip(), f_code.text.strip().upper())
+
+        form_dialog("Nueva variedad", form, ok, "AGREGAR")
+
+    items = []
+    if allow_none:
+        items.append((allow_none, "", lambda: on_pick("", "")))
+    items += [(e["name"], f"Código {e['code']}" if e["code"] else "", lambda e=e: on_pick(e["name"], e["code"] or ""))
+              for e in catalog.entries(shared, profile)]
+    items.append(("+ Nueva variedad…", "Se guarda en el catálogo para la próxima vez", new))
+    pick_dialog(f"Variedades · {'Predio' if profile == 'predio' else 'I+D'}", items)
+
+
+def manage_catalog(on_change=None):
+    """Ajustes › Registros: ver, agregar, cambiar el código o quitar variedades del catálogo."""
+    import catalog
+    a = app()
+    profile = current_profile()
+    shared = a.workspaces.shared
+
+    def options(e):
+        def set_code():
+            from kivy.factory import Factory
+            form = MDBoxLayout(orientation="vertical", adaptive_height=True, padding=(0, dp(8), 0, 0))
+            f = Factory.Field(hint_text="Código para las fotos", text=e["code"] or "")
+            form.add_widget(f)
+
+            def ok(_f):
+                catalog.add(shared, profile, e["name"], f.text.upper())
+                if on_change:
+                    on_change()
+            form_dialog(e["name"], form, ok)
+
+        def remove():
+            catalog.remove(shared, profile, e["name"])
+            a.toast(f"«{e['name']}» quitada del catálogo (los registros no cambian)")
+            if on_change:
+                on_change()
+
+        pick_dialog(e["name"], [("Cambiar código", e["code"] or "sin código", set_code),
+                                ("Quitar del catálogo", "Los registros existentes no cambian", remove)])
+
+    items = [(e["name"], f"Código {e['code']}" if e["code"] else "sin código", lambda e=e: options(e))
+             for e in catalog.entries(shared, profile)]
+    items.append(("+ Nueva variedad…", "", lambda: pick_catalog(lambda *_: on_change and on_change(),
+                                                                profile)))
+    pick_dialog(f"Catálogo de variedades · {'Predio' if profile == 'predio' else 'I+D'}", items)
+
+
+def remember_variety(name: str, code: str = "", profile: str | None = None) -> None:
+    """Variedad escrita a mano al crear un registro: queda en el catálogo (si es un nombre real)."""
+    import catalog
+    try:
+        catalog.add(app().workspaces.shared, profile or current_profile(), name, code)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class RoundThumb(Widget):
     """Miniatura con esquinas redondeadas dibujada con UNA instrucción (RoundedRectangle
     con textura, recortada «cover»). FitImage de KivyMD usa un stencil por imagen, que en
@@ -341,18 +424,26 @@ def thumb_widget(path: str | None, size: int = 320, icon: str = "image-off-outli
     from kivy.uix.label import Label
     from kivymd.icon_definitions import md_icons
     from kivymd import fonts_path
+    # Ícono chico y nítido (fuente vectorial a su tamaño real, no una imagen estirada).
     mark = Label(text=md_icons.get(icon, ""), font_name=os.path.join(fonts_path, "materialdesignicons-webfont.ttf"),
-                 font_size=dp(24), color=c(theme.LEAF))
+                 font_size=dp(20), color=c(theme.LEAF, .45), size_hint=(None, None), size=(dp(28), dp(28)))
     thumb.add_widget(mark)
     thumb.bind(pos=lambda w, v: setattr(mark, "center", w.center), size=lambda w, v: setattr(mark, "center", w.center))
+
+    state = {"async": False}
 
     def ready(src):
         if src:
             thumb.remove_widget(mark)
             thumb.source = src
+            if state["async"]:   # recién generada: aparece suave, sin salto
+                from kivy.animation import Animation
+                thumb.opacity = 0
+                Animation(opacity=1, d=.15).start(thumb)
 
     if path and os.path.exists(path):
-        app().thumb_async(path, size, ready)
+        app().thumb_async(path, size, ready)   # en caché: se dibuja ya, sin marcador
+        state["async"] = True
     return thumb
 
 
@@ -472,6 +563,80 @@ class HomeScreen(MDScreen):
     def refresh_current(self):
         self.update_banner()
         getattr(self.ids, self.ids.tabs.current or "sampling").refresh()
+        Clock.schedule_once(lambda *_: self.update_drive_icon(), 0)
+
+    # ------------------------------------------------- acceso rápido a Drive
+    def _action(self, sources) -> object | None:
+        for btn in self.ids.bar.ids.right_actions.children:
+            if getattr(btn, "icon", None) in sources:
+                return btn
+        return None
+
+    def _style_actions(self):
+        if getattr(self, "_styled", False):
+            return
+        ai = self._action((theme.AI_BAR,))
+        if ai is not None and ai.ids.lbl_ic._size[0]:   # el cerebro, más grande que el resto
+            lbl = ai.ids.lbl_ic
+            grow = dp(31) - lbl._size[0]
+            lbl._size = [dp(31), dp(31)]
+            lbl.y -= grow / 2
+            self._styled = True
+
+    def update_drive_icon(self, *_):
+        """Drive con flecha (hay algo por subir), con check (al día) o tachado (sin cuenta)."""
+        self._style_actions()
+        if getattr(self, "_spin_ev", None):
+            return   # subiendo: lo actualiza la animación
+        btn = self._action([theme.DRIVE_UP, theme.DRIVE_OK, theme.DRIVE_OFF])
+        if btn is None:
+            return
+        try:
+            st = app().drive.status()
+        except Exception:  # noqa: BLE001
+            return
+        btn.icon = (theme.DRIVE_OFF if not st["enabled"] else
+                    theme.DRIVE_UP if st["pending"] or st["errors"] else theme.DRIVE_OK)
+
+    def drive_quick(self):
+        a = app()
+        drive = a.drive
+        if not drive.available:
+            a.toast("El respaldo en Google Drive funciona en el teléfono (Android).")
+            return
+        if not drive.enabled:
+            a.toast("Elija su cuenta de Google para respaldar en Drive")
+            drive.connect(lambda ok, msg: Clock.schedule_once(lambda *_: (a.toast(msg), self.update_drive_icon())))
+            return
+        if getattr(self, "_spin_ev", None):
+            a.toast("Subiendo a Google Drive…")
+            return
+        st = drive.status()
+        if not st["pending"] and not st["errors"]:
+            a.toast("Todo está respaldado en Google Drive ✓")
+        drive.retry_errors()   # reintenta errores y sube lo pendiente (en segundo plano)
+        self._start_spin()
+
+    def _start_spin(self):
+        import time as _t
+        btn = self._action([theme.DRIVE_UP, theme.DRIVE_OK, theme.DRIVE_OFF] + theme.DRIVE_SPIN)
+        if btn is None:
+            return
+        state = {"k": 0, "t0": _t.monotonic()}
+
+        def tick(_dt):
+            state["k"] = (state["k"] + 1) % len(theme.DRIVE_SPIN)
+            btn.icon = theme.DRIVE_SPIN[state["k"]]
+            drive = app().drive
+            if _t.monotonic() - state["t0"] > 1.2 and not drive.running:
+                self._spin_ev.cancel()
+                self._spin_ev = None
+                st = drive.status()
+                btn.icon = theme.DRIVE_UP if st["pending"] or st["errors"] else theme.DRIVE_OK
+                app().toast("Todo respaldado en Google Drive ✓" if btn.icon == theme.DRIVE_OK else
+                            st.get("message") or "Quedan archivos por subir")
+
+        self._spin_ev = Clock.schedule_interval(tick, .1)
 
     def update_banner(self):
         """Franja bajo la barra: en qué ensayo o predio se está trabajando."""
@@ -683,6 +848,7 @@ def unit_dialog(on_saved=None):
         except ValueError as exc:
             a.toast(str(exc))
             return False
+        remember_variety(f.ids.name.text, f.ids.code.text.strip(), "predio")
         a.toast(f"Agregado: {ph.unit_name(f.sector, f.irrigation)} · {f.ids.name.text.strip()}")
         if on_saved:
             on_saved()
@@ -1248,6 +1414,13 @@ class SectorIrrigationMixin:
 class VarietyForm(SectorIrrigationMixin, MDBoxLayout):
     pass
 
+    def pick_catalog(self):
+        def chosen(name, code):
+            self.ids.name.text = name
+            if code:
+                self.ids.code.text = code
+        pick_catalog(chosen)
+
 
 class VarietiesTab(MDScreen):
     def refresh(self):
@@ -1300,10 +1473,30 @@ class VarietiesTab(MDScreen):
         app().open_variety(variety_id)
 
     # ------------------------------------------- tratamientos × repeticiones
+    def _catalog_card(self, box):
+        import catalog
+        from kivy.factory import Factory
+        a = app()
+        profile = current_profile()
+        names = [e["name"] for e in catalog.entries(a.workspaces.shared, profile)]
+        card = Factory.PaperCard()
+        card.add_widget(Factory.SectionLabel(
+            text=f"CATÁLOGO DE VARIEDADES · {'PREDIO' if profile == 'predio' else 'I+D'}"))
+        card.add_widget(Factory.Muted(
+            text=(f"{len(names)} variedades: " + ", ".join(names[:8]) + ("…" if len(names) > 8 else ""))
+            if names else "Vacío: agregue las variedades que usa para elegirlas de una lista al crear "
+                          "registros, sectores o tratamientos."))
+        b = Factory.GhostButton(icon="format-list-bulleted", text="Ver y agregar variedades")
+        b.bind(on_release=lambda *_: manage_catalog(on_change=self.refresh))
+        card.add_widget(b)
+        box.add_widget(card)
+        box.add_widget(Widget(size_hint_y=None, height=dp(8)))
+
     def _trial_card(self, trial: bool):
         from kivy.factory import Factory
         box = self.ids.trial_box
         box.clear_widgets()
+        self._catalog_card(box)
         if not trial:
             return
         db = app().db
@@ -1323,8 +1516,19 @@ class VarietiesTab(MDScreen):
         row.add_widget(b1)
         row.add_widget(b2)
         card.add_widget(row)
+        tv = db.trial_cultivar
+        b3 = Factory.GhostButton(icon="sprout-outline",
+                                 text=f"Variedad del ensayo: {tv}" if tv else "Variedad del ensayo: (ninguna)")
+        b3.bind(on_release=lambda *_: pick_catalog(self._set_trial_variety, "id",
+                                                   allow_none="— Sin variedad para todo el ensayo"))
+        card.add_widget(b3)
         box.add_widget(card)
         box.add_widget(Widget(size_hint_y=None, height=dp(8)))
+
+    def _set_trial_variety(self, name, _code):
+        app().db.set_setting("trial_cultivar", name)
+        app().toast(f"Variedad del ensayo: {name}" if name else "Ensayo sin variedad común")
+        self.refresh()
 
     def trial_size_dialog(self):
         from kivy.factory import Factory
@@ -1369,15 +1573,31 @@ class VarietiesTab(MDScreen):
                                 text=t["description"] or "", multiline=True)
             form.add_widget(f_n)
             form.add_widget(f_d)
+            chosen = {"v": (t.get("cultivar") or "").strip()}
+            default = a.db.trial_cultivar
+            vb = Factory.GhostButton(icon="sprout-outline")
+
+            def label():
+                vb.text = (f"Variedad: {chosen['v']}" if chosen["v"] else
+                           f"Variedad: la del ensayo ({default})" if default else "Variedad: (ninguna)")
+
+            def pick(name, _code):
+                chosen["v"] = name
+                label()
+
+            vb.bind(on_release=lambda *_: pick_catalog(pick, "id", allow_none="— La del ensayo / ninguna"))
+            label()
+            form.add_widget(vb)
 
             def ok(_f):
-                a.db.update_treatment(t["num"], f_n.text, f_d.text)
+                a.db.update_treatment(t["num"], f_n.text, f_d.text, chosen["v"])
                 self.refresh()
 
             form_dialog(f"Tratamiento T{t['num']}", form, ok)
 
         pick_dialog("Nombres de los tratamientos",
-                    [(t["label"], t["description"] or f"Parcelas: {', '.join(p['name'] for p in t['parcels'])}",
+                    [(t["label"], " · ".join(x for x in (t["variety"], t["description"]) if x)
+                      or f"Parcelas: {', '.join(p['name'] for p in t['parcels'])}",
                       lambda t=t: edit(t)) for t in a.db.list_treatments()])
 
     def add_dialog(self):
@@ -1396,6 +1616,7 @@ class VarietiesTab(MDScreen):
                 form.ids.name.helper_text = str(exc)
                 form.ids.name.helper_text_mode = "on_error"
                 return False
+            remember_variety(form.ids.name.text, form.ids.code.text.strip())
             app().toast("Variedad agregada")
             self.refresh()
         form_dialog("Nueva variedad", VarietyForm(), ok, "AGREGAR")

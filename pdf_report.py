@@ -626,9 +626,9 @@ def treatments(ctx: dict, names: dict, num=None) -> Report:
     r = _doc(ctx, [f"{ctx['n_t']} tratamientos", f"{ctx['n_r']} repeticiones", f"{len(weeks)} semanas"],
              names, num)
     r.h2("Tratamientos")
-    r.table(["Tratamiento", "Descripción", "Parcelas"],
-            [[{"text": t["label"], "bold": True}, t.get("description") or "—",
-              ", ".join(p["name"] for p in t["parcels"])] for t in ctx["treatments"]], [1.6, 3, 2.4], 8)
+    r.table(["Tratamiento", "Variedad", "Descripción", "Parcelas"],
+            [[{"text": t["label"], "bold": True}, t.get("variety") or "—", t.get("description") or "—",
+              ", ".join(p["name"] for p in t["parcels"])] for t in ctx["treatments"]], [1.5, 1.3, 2.6, 2.2], 8)
 
     r.h2("Estado BBCH medio por tratamiento",
          "Promedio de las repeticiones en cada semana. Letras distintas = diferencias significativas "

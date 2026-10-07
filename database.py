@@ -322,6 +322,7 @@ class Database:
         "sampling_weeks": [("skipped", "INTEGER NOT NULL DEFAULT 0")],   # semana no muestreada
         "variety_attachments": [("week_id", "INTEGER")],                # foto adjunta semanal
         "ai_references": [("workspace", "TEXT")],                       # ensayo de la foto
+        "treatments": [("cultivar", "TEXT")],                           # variedad del tratamiento
     }
 
     def _add_missing_columns(self) -> None:
@@ -589,20 +590,30 @@ class Database:
     def treatment_label(t: dict) -> str:
         return f"T{t['num']} · {t['name']}" if (t.get("name") or "").strip() else f"T{t['num']}"
 
+    @property
+    def trial_cultivar(self) -> str:
+        """Variedad de todo el ensayo (opcional; cada tratamiento puede tener otra)."""
+        return self.get_setting("trial_cultivar", "") or ""
+
     def list_treatments(self) -> list[dict]:
         nt, _nr = self.trial_size()
         out = []
+        default = self.trial_cultivar
         for t in self.query("SELECT * FROM treatments WHERE num<=? ORDER BY num", (nt,)):
             t["label"] = self.treatment_label(t)
+            t["variety"] = (t.get("cultivar") or "").strip() or default
             t["parcels"] = self.query("SELECT * FROM varieties WHERE active=1 AND treatment=? "
                                       "ORDER BY rep", (t["num"],))
             out.append(t)
         return out
 
-    def update_treatment(self, num: int, name: str = "", description: str = "") -> None:
+    def update_treatment(self, num: int, name: str = "", description: str = "",
+                         cultivar: str | None = None) -> None:
         self.execute("INSERT OR IGNORE INTO treatments(num, name) VALUES (?, '')", (num,))
         self.execute("UPDATE treatments SET name=?, description=? WHERE num=?",
                      ((name or "").strip(), (description or "").strip(), num))
+        if cultivar is not None:   # "" = usa la variedad del ensayo
+            self.execute("UPDATE treatments SET cultivar=? WHERE num=?", ((cultivar or "").strip(), num))
         self.log("update", "treatment", num, (name or "").strip())
 
     def delete_variety(self, variety_id: int, purge: bool = False) -> None:

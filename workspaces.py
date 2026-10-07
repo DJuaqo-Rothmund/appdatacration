@@ -87,6 +87,12 @@ class Workspaces:
                 self.shared.upsert_bbch(code, label, desc, kw, source="base")
         self.shared.refresh_bbch_scale()   # escala BBCH del frambueso al día (cañas y laterales)
         self.ensure_initial()
+        import catalog
+        catalog.ensure(self.shared)
+        try:
+            catalog.seed_from_workspaces(self)   # una sola vez: variedades ya existentes
+        except Exception:  # noqa: BLE001 - nunca impedir abrir la app
+            pass
 
     # ----------------------------------------------------------- registro
     def ensure_initial(self) -> None:

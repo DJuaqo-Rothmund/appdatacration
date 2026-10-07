@@ -5,10 +5,10 @@
 <h2>Tratamientos</h2>
 <div class="scroll-x">
 <table>
-  <thead><tr><th>Tratamiento</th><th>Descripción</th><th>Parcelas</th></tr></thead>
+  <thead><tr><th>Tratamiento</th><th>Variedad</th><th>Descripción</th><th>Parcelas</th></tr></thead>
   <tbody>
   {% for t in treatments %}
-  <tr><td><strong>{{ t.label }}</strong></td><td>{{ t.description or "—" }}</td>
+  <tr><td><strong>{{ t.label }}</strong></td><td>{{ t.variety or "—" }}</td><td>{{ t.description or "—" }}</td>
     <td class="mono small">{{ t.parcels|map(attribute="name")|join(", ") }}</td></tr>
   {% endfor %}
   </tbody>

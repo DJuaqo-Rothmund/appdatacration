@@ -66,6 +66,50 @@ def blob(n, rgb, seed, stars=False):
     return out
 
 
+def bar_icons():
+    """Barra del muestreo: cerebro azul destacado (sin destellos) y botón de Drive."""
+    from scipy import ndimage as nd
+    ai = Image.open(os.path.join(UI, "start_ai.png")).convert("RGBA")
+    a = np.asarray(ai)[..., 3] > 60
+    lab, n = nd.label(nd.binary_dilation(a, iterations=2))
+    sizes = nd.sum(a, lab, range(1, n + 1))
+    keep = np.isin(lab, [int(np.argmax(sizes)) + 1])
+    arr = np.asarray(ai).copy()
+    arr[..., 3] = (arr[..., 3] * keep).astype("uint8")
+    core = Image.fromarray(arr)
+    core = core.crop(core.getbbox())
+    side = max(core.size) + 16
+    sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    sq.alpha_composite(core, ((side - core.width) // 2, (side - core.height) // 2))
+    sq.resize((144, 144), Image.LANCZOS).save(os.path.join(UI, "ai_bar.png"))
+
+    from PIL import ImageFont
+    from kivymd import fonts_path
+    from kivymd.icon_definitions import md_icons
+    font = ImageFont.truetype(os.path.join(fonts_path, "materialdesignicons-webfont.ttf"), 120)
+    small = ImageFont.truetype(os.path.join(fonts_path, "materialdesignicons-webfont.ttf"), 40)
+    ink = (0x1E, 0x4A, 0x3A, 255)
+
+    def drive(badge, color):
+        im = Image.new("RGBA", (144, 144), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.text((60, 66), md_icons["google-drive"], font=font, fill=ink, anchor="mm")
+        if badge:
+            d.ellipse([86, 86, 142, 142], fill=color, outline=(255, 255, 255, 255), width=5)
+            d.text((114, 115), md_icons[badge], font=small, fill=(255, 255, 255, 255), anchor="mm")
+        return im
+
+    drive("arrow-up-bold", (0xA8, 0x18, 0x4A, 255)).save(os.path.join(UI, "drive_up.png"))
+    drive("check-bold", (0x2F, 0x6B, 0x4F, 255)).save(os.path.join(UI, "drive_ok.png"))
+    drive("cloud-off-outline", (0x8A, 0x8F, 0x80, 255)).save(os.path.join(UI, "drive_off.png"))
+    for k in range(8):   # círculo de carga (8 cuadros)
+        im = Image.new("RGBA", (144, 144), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.ellipse([22, 22, 122, 122], outline=(0x1E, 0x4A, 0x3A, 50), width=12)
+        d.arc([22, 22, 122, 122], k * 45, k * 45 + 110, fill=(0xA8, 0x18, 0x4A, 255), width=12)
+        im.save(os.path.join(UI, f"spin_{k}.png"))
+
+
 def main():
     background()
     blob(420, (250, 214, 228), 115).save(os.path.join(UI, "blob_id.png"))
@@ -76,6 +120,7 @@ def main():
     glow = tint(ai, (120, 190, 255)).filter(ImageFilter.GaussianBlur(14))
     glow.putalpha(glow.split()[3].point(lambda v: min(255, int(v * 2.2))))
     glow.save(os.path.join(UI, "ai_glow.png"))
+    bar_icons()
 
 
 if __name__ == "__main__":

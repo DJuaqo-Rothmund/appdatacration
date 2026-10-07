@@ -58,6 +58,11 @@ BLOB_PREDIO = resource_path("assets", "ui", "blob_predio.png")
 BLOB_AI = resource_path("assets", "ui", "blob_ai.png")             # burbuja nocturna con estrellas
 START_AI_NIGHT = resource_path("assets", "ui", "start_ai_night.png")
 AI_GLOW = resource_path("assets", "ui", "ai_glow.png")
+AI_BAR = resource_path("assets", "ui", "ai_bar.png")               # cerebro azul (barra)
+DRIVE_UP = resource_path("assets", "ui", "drive_up.png")           # hay algo por subir
+DRIVE_OK = resource_path("assets", "ui", "drive_ok.png")           # todo al día
+DRIVE_OFF = resource_path("assets", "ui", "drive_off.png")         # sin cuenta conectada
+DRIVE_SPIN = [resource_path("assets", "ui", f"spin_{k}.png") for k in range(8)]
 AI_ICON = resource_path("assets", "ui", "ai_outline.png")
 GOOGLE_G = resource_path("assets", "ui", "google_g.png")
 # Fondo liso de la pantalla de inicio: el MISMO color que el presplash de Android
