@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tema de la app: fondo del mismo color que el presplash (sin destello al abrir). -->
+<resources>
+    <color name="pheno_splash_bg">#F2F4EE</color>
+    <style name="PhenoTheme" parent="@android:style/Theme.NoTitleBar">
+        <item name="android:windowBackground">@color/pheno_splash_bg</item>
+    </style>
+</resources>

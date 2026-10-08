@@ -91,6 +91,11 @@ android.archs = arm64-v8a
 # (visibilidad de paquetes de Android 11+) al enviar informes.
 android.extra_manifest_xml = ./android/extra_manifest.xml
 
+# (list) Recursos Android propios y tema de la app: en Android 12+ el splash del sistema
+# (ícono en grande) queda invisible y con el color del presplash: una sola pantalla de inicio.
+android.add_resources = android/res
+android.apptheme = @style/PhenoTheme
+
 # (list) Dependencias Gradle: Google Identity Services (autorización de Google Drive).
 android.gradle_dependencies = com.google.android.gms:play-services-auth:21.2.0
 

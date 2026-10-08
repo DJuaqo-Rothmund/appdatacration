@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: el splash del sistema (ícono de la app en grande) queda sin ícono y
+     con el fondo del presplash, así al abrir se ve una sola pantalla de inicio. -->
+<resources>
+    <style name="PhenoTheme" parent="@android:style/Theme.NoTitleBar">
+        <item name="android:windowBackground">@color/pheno_splash_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/pheno_splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>
