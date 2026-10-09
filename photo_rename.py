@@ -80,6 +80,37 @@ def migrate_local(db, code: str | None = None) -> dict:
     Idempotente: se puede ejecutar en cada inicio (lo ya renombrado no se toca)."""
     code = db.code if code is None else code
     known = known_codes(db)
+    res = _rename_files(db, lambda n: new_name(n, code, known))
+    if res["renamed"] or res["missing"]:
+        db.log("rename", "photos", None,
+               f"{res['renamed']} fotos con fecha aaaammdd y código {code or '—'}")
+    return res
+
+
+_CODED = re.compile(r"^(?P<date>\d{8})-(?P<code>[A-Z0-9]{2,4})-(?P<rest>.+)$")
+
+
+def recode_name(name: str, old: str, new: str) -> str | None:
+    """«20261005-NV-C11G.jpg» -> «20261005-AM-C11G.jpg» (None si no es de `old`)."""
+    m = _CODED.match(name or "")
+    if not m or m["code"] != old:
+        return None
+    return f"{m['date']}-{new}-{m['rest']}"
+
+
+def recode_local(db, old: str, new: str) -> dict:
+    """Ensayo traspasado a otro código (p. ej. NV -> AM): renombra sus archivos y rutas.
+    Lo ya subido a Drive conserva su nombre en la cola: lo renombra el respaldo
+    (DriveBackup.relocate_moved) para saber qué archivos de Drive tocar."""
+    res = _rename_files(db, lambda n: recode_name(n, old, new))
+    if res["renamed"] or res["missing"]:
+        db.log("rename", "photos", None, f"{res['renamed']} fotos: código {old} -> {new}")
+    return res
+
+
+def _rename_files(db, rename) -> dict:
+    """Aplica `rename(nombre) -> nombre nuevo | None` a los archivos de la app y a todas
+    sus rutas (fotos, adjuntas, mediciones, referencias de la IA y cola de Drive)."""
     moved: dict[str, str] = {}      # ruta antigua -> ruta nueva
     renamed = missing = 0
     for table, col in PATH_COLUMNS:
@@ -89,7 +120,7 @@ def migrate_local(db, code: str | None = None) -> dict:
             continue
         for r in rows:
             old = r["p"]
-            nn = new_name(os.path.basename(old), code, known)
+            nn = rename(os.path.basename(old))
             if not nn:
                 continue
             dest = moved.get(old)
@@ -109,7 +140,7 @@ def migrate_local(db, code: str | None = None) -> dict:
     # Cola de Drive: los pendientes se suben ya con el nombre nuevo.
     for r in db.query("SELECT id, name FROM drive_queue WHERE status != 'done'"):
         head, _, base = (r["name"] or "").rpartition("/")
-        nn = new_name(base, code, known)
+        nn = rename(base)
         if nn:
             db.execute("UPDATE drive_queue SET name=? WHERE id=?", (f"{head}/{nn}" if head else nn, r["id"]))
     # Memoria de la IA (base común): rutas de las fotos de este ensayo.
@@ -118,6 +149,4 @@ def migrate_local(db, code: str | None = None) -> dict:
             if r["image_path"] in moved:
                 db.ai_db.execute("UPDATE ai_references SET image_path=? WHERE id=?",
                                  (moved[r["image_path"]], r["id"]))
-    if renamed or missing:
-        db.log("rename", "photos", None, f"{renamed} fotos con fecha aaaammdd y código {code or '—'}")
     return {"renamed": renamed, "missing": missing}

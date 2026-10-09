@@ -198,6 +198,36 @@ class FenoRubusApp(MDApp):
             if self.home is not None:
                 self.home.update_banner()
 
+    def move_to_predio(self, src: dict, dst: dict):
+        """Traspasa un ensayo de I+D a un predio vacío (ver Workspaces.move_to_predio)."""
+        if "drive" in self.__dict__ and self.drive.running:
+            self.toast("Espere a que termine la subida a Google Drive y vuelva a intentarlo.")
+            return
+        for ws_id in (src["id"], dst["id"]):   # se cierran: sus archivos cambian de dueño
+            db = self._dbs.pop(ws_id, None)
+            if db is not None:
+                if db is self.db:
+                    self.db = None
+                try:
+                    db.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        try:
+            res = self.workspaces.move_to_predio(src, dst)
+        except Exception as exc:  # noqa: BLE001
+            self.toast(str(exc))
+            self.open_workspace((self.workspace or src)["id"])
+            return
+        self.open_workspace(dst["id"], target="sectors")
+        # Galería del teléfono («Imágenes de Fenología»): …-NV-… -> …-AM-… (hilo principal).
+        from photo_rename import recode_name
+        try:
+            self.media.rename_public_legacy(lambda n: recode_name(n, res["old"], res["new"]))
+        except Exception as exc:  # noqa: BLE001 - nunca impedir el traspaso
+            print("gallery recode:", exc)
+        self.toast(f"Listo: {res['units']} sectores y {res['photos']} fotos ahora en "
+                   f"{dst['name']} ({res['new']}).")
+
     def open_workspace(self, ws_id: int, target: str = "home"):
         """Cambia de ensayo o predio: todas las pantallas se rehacen con sus datos."""
         ws = self.workspaces.get(ws_id)

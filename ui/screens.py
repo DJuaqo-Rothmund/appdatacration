@@ -1021,7 +1021,33 @@ class WorkspacesScreen(MDScreen):
             a.workspaces.set_archived(ws["id"], flag)
             self.refresh()
 
+        def move():
+            predios = a.workspaces.list("predio")
+            if not predios:
+                a.toast("No hay predios: cree uno primero en el menú Predio.")
+                return
+
+            def pick(dst):
+                if a.workspaces.records(dst):
+                    a.toast(f"«{dst['name']}» ya tiene registros: solo se traspasa a un predio vacío.")
+                    return
+                text = (f"Todo lo de «{ws['name']}» ({ws['code']}) pasa al predio «{dst['name']}» "
+                        f"({dst['code']}): sectores, registros, fotos y mediciones, sin copiar ni "
+                        f"volver a subir nada.\n\nLas fotos cambian su código a {dst['code']} en el "
+                        f"teléfono, en la galería y en Google Drive (en el próximo respaldo). "
+                        f"«{ws['name']}» queda vacío en I+D.")
+                Clock.schedule_once(lambda *_: confirm(
+                    f"Mover a {dst['name']}", text,
+                    [("Mover", lambda: a.move_to_predio(ws, dst))]), .3)
+
+            # El menú anterior se está cerrando: el siguiente diálogo, un instante después.
+            Clock.schedule_once(lambda *_: pick_dialog("¿A qué predio?", [
+                (p["name"], f"Código {p['code']}", lambda p=p: pick(p)) for p in predios]), .3)
+
         items = [("Cambiar nombre", f"Código {ws['code']} (no cambia)", rename)]
+        if ws["profile"] == "id" and not ws["archived"]:
+            items.append(("Mover a Predio…", "Si estos datos son de un predio (p. ej. tras actualizar)",
+                          move))
         if ws["archived"]:
             items.append(("Desarchivar", "Vuelve a la lista", lambda: archive(False)))
         else:

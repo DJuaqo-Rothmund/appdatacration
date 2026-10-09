@@ -710,7 +710,9 @@ class DriveBackup:
     def relocate_legacy(self) -> int:
         """Hasta la 1.1.33 todo se subía directo a la carpeta raíz. Una sola vez, lo
         existente (que es del ensayo «Nuevas variedades») pasa a su carpeta de ensayo."""
-        if self.db.code != "NV" or self.db.get_setting("drive_layout_v2", False):
+        # Su dueño es «Nuevas variedades», salvo que se haya traspasado a un predio.
+        if (self.db.code != self.db.get_setting("drive_legacy_code", "NV")
+                or self.db.get_setting("drive_layout_v2", False)):
             return 0
         root = self._folder(ROOT_FOLDER, None)
         q = f"'{root}' in parents and mimeType='{FOLDER_MIME}' and trashed=false"
@@ -731,6 +733,71 @@ class DriveBackup:
             self.db.log("move", "drive", None, f"{moved} carpetas a {self.prefix.strip('/')}")
         self.db.set_setting("drive_layout_v2", True)
         return moved
+
+    def _find_path(self, path: str) -> str | None:
+        """Id de la carpeta «PhenoRubus/<path>» en Drive, o None si no existe (no la crea)."""
+        parent = self._folder(ROOT_FOLDER, None)
+        for part in path.strip("/").split("/"):
+            esc = part.replace("\\", "\\\\").replace("'", "\\'")
+            q = (f"name='{esc}' and mimeType='{FOLDER_MIME}' and trashed=false "
+                 f"and '{parent}' in parents")
+            found = self._call("GET", f"{API}?" + urllib.parse.urlencode(
+                {"q": q, "fields": "files(id)", "spaces": "drive"})).get("files", [])
+            if not found:
+                return None
+            parent = found[0]["id"]
+        return parent
+
+    def relocate_moved(self) -> int:
+        """Ensayo traspasado a un predio (Workspaces.move_to_predio): en Drive, el contenido
+        de «I+D/Nuevas variedades» pasa a «Predio/El Amanecer» y las fotos ya subidas toman
+        el código nuevo (…-NV-… -> …-AM-…). Nada se vuelve a subir."""
+        mv = self.db.get_setting("ws_move_pending")
+        if not mv:
+            return 0
+        from photo_rename import recode_name
+        self._set_message("Ordenando Drive tras el traspaso…")
+        src = self._find_path(mv["from"])
+        moved = 0
+        if src:
+            dest = self._folder(ROOT_FOLDER, None)
+            for part in mv["to"].strip("/").split("/"):
+                dest = self._folder(part, dest)
+            q = f"'{src}' in parents and trashed=false"
+            children = self._call("GET", f"{API}?" + urllib.parse.urlencode(
+                {"q": q, "fields": "files(id,name)", "spaces": "drive", "pageSize": "500"})).get("files", [])
+            for f in children:
+                self._call("PATCH", f"{API}/{f['id']}?" + urllib.parse.urlencode(
+                    {"addParents": dest, "removeParents": src, "fields": "id"}),
+                    b"{}", "application/json; charset=UTF-8")
+                moved += 1
+            self.db.set_setting("drive_folders", {})   # las rutas en caché cambiaron
+        rows = self.db.query("SELECT id, name, drive_id FROM drive_queue "
+                             "WHERE status='done' AND drive_id IS NOT NULL")
+        done = 0
+        for i, r in enumerate(rows, 1):
+            name = r["name"] or ""
+            if name.startswith(mv["from"] + "/"):
+                name = mv["to"] + name[len(mv["from"]):]
+            head, _, base = name.rpartition("/")
+            nn = recode_name(base, mv["old"], mv["new"])
+            if nn:
+                if i % 10 == 0:
+                    self._set_message(f"Renombrando en Drive {i} de {len(rows)}…")
+                try:
+                    self._call("PATCH", f"{API}/{r['drive_id']}?fields=id",
+                               json.dumps({"name": nn}).encode(), "application/json; charset=UTF-8")
+                    done += 1
+                except DriveError as exc:
+                    if exc.status not in (403, 404):   # 404: ya no está; 403: no es de la app
+                        raise
+                name = f"{head}/{nn}" if head else nn
+            if name != r["name"]:
+                self.db.execute("UPDATE drive_queue SET name=? WHERE id=?", (name, r["id"]))
+        self.db.set_setting("ws_move_pending", None)
+        self.db.log("move", "drive", None,
+                    f"{mv['from']} -> {mv['to']}: {moved} carpetas, {done} fotos renombradas")
+        return moved + done
 
     def rename_legacy(self) -> int:
         """Fotos ya subidas con el nombre antiguo «ddmmaaaa-…»: se renombran en Drive a
@@ -790,6 +857,7 @@ class DriveBackup:
             self._skip_missing()
             # Primero mover lo de versiones anteriores (rápido: unas pocas carpetas)…
             self.relocate_legacy()  # lo subido antes de los ensayos -> «I+D/Nuevas variedades»
+            self.relocate_moved()   # ensayo traspasado a un predio: carpeta y nombres en Drive
             while True:
                 self._again = False
                 if self.wifi_only and self.metered():

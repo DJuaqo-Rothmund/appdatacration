@@ -197,6 +197,93 @@ class Workspaces:
         safe = ws["name"].replace("/", "-").strip()
         return f"{PROFILES.get(ws['profile'], 'Otros')}/{safe}"
 
+    # ------------------------------------------------- traspaso I+D -> Predio
+    RECORD_TABLES = ("observations", "photos", "variety_attachments", "measure_entries")
+
+    def records(self, ws: dict) -> int:
+        """Registros (observaciones, fotos, adjuntas, mediciones) guardados en un ensayo."""
+        path = self.path(ws)
+        if not os.path.exists(path):
+            return 0
+        db = Database(path, seed=False)
+        try:
+            n = 0
+            for table in self.RECORD_TABLES:
+                try:
+                    n += db.query_one(f"SELECT COUNT(*) AS n FROM {table}")["n"]
+                except Exception:  # noqa: BLE001 - tabla de otra versión
+                    pass
+            return n
+        finally:
+            db.close()
+
+    def move_to_predio(self, src: dict, dst: dict) -> dict:
+        """Traspasa TODO un ensayo de I+D a un predio vacío (p. ej. lo que quedó en
+        «Nuevas variedades» al actualizar un teléfono que registraba un predio).
+
+        No copia nada: el predio pasa a usar la base del ensayo y el ensayo queda con una
+        base nueva y vacía. Después las fotos toman el código del predio (NV -> AM) y la
+        memoria de la IA se reasigna. Drive se ordena en el próximo respaldo
+        (carpeta y nombres; nada se vuelve a subir). Las bases de ambos deben estar
+        cerradas antes de llamar."""
+        src, dst = self.get(src["id"]), self.get(dst["id"])
+        if not src or not dst or src["id"] == dst["id"]:
+            raise ValueError("Elija un ensayo y un predio distintos.")
+        if src["profile"] != "id" or dst["profile"] != "predio":
+            raise ValueError("Solo se puede traspasar un ensayo de I+D a un predio.")
+        if self.records(dst):
+            raise ValueError(f"«{dst['name']}» ya tiene registros: el traspaso solo se hace a un "
+                             "predio vacío (no se mezclan datos).")
+        old_code, new_code = src["code"], dst["code"]
+        from_prefix, to_prefix = self.drive_prefix(src), self.drive_prefix(dst)
+        # 1) El predio toma la base del ensayo; el ensayo recibe una base nueva y vacía.
+        for ext in ("", "-wal", "-shm", "-journal"):
+            try:
+                os.remove(self.path(dst) + ext)
+            except OSError:
+                pass
+        fresh, n = f"ensayos/{old_code}.sqlite3", 2
+        while os.path.exists(os.path.join(self.data_dir, fresh)) or fresh == src["file"]:
+            fresh, n = f"ensayos/{old_code}{n}.sqlite3", n + 1
+        os.makedirs(os.path.join(self.data_dir, "ensayos"), exist_ok=True)
+        empty = Database(os.path.join(self.data_dir, fresh), seed=False)
+        try:   # sin variedades de ejemplo: el ensayo queda realmente vacío
+            empty.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('seeded', ?)", (_now(),))
+        finally:
+            empty.close()
+        self.shared.execute("UPDATE workspaces SET file=? WHERE id=?", (src["file"], dst["id"]))
+        self.shared.execute("UPDATE workspaces SET file=? WHERE id=?", (fresh, src["id"]))
+        # 2) Memoria de la IA: las referencias del ensayo pasan al predio.
+        self.shared.execute("UPDATE ai_references SET workspace=? WHERE workspace=?", (new_code, old_code))
+        # Carpetas raíz de versiones muy antiguas (antes de los ensayos) -> carpeta del predio.
+        if (not self.shared.get_setting("drive_layout_v2", False)
+                and self.shared.get_setting("drive_legacy_code", "NV") == old_code):
+            self.shared.set_setting("drive_legacy_code", new_code)
+        # 3) Archivos: «…-NV-…» -> «…-AM-…»; sectores con nombre de predio; catálogo.
+        db = self.open(self.get(dst["id"]))
+        try:
+            from photo_rename import recode_local
+            res = recode_local(db, old_code, new_code)
+            if db.query_one("SELECT 1 FROM drive_queue WHERE status='done' LIMIT 1"):
+                db.set_setting("ws_move_pending", {"from": from_prefix, "to": to_prefix,
+                                                   "old": old_code, "new": new_code})
+            # Variedades de ejemplo de I+D («Código n») sin sector ni registros: se archivan
+            # (no son sectores del predio; nada se borra).
+            db.execute("UPDATE varieties SET active=0 WHERE active=1 AND sector IS NULL "
+                       "AND irrigation IS NULL AND NOT EXISTS "
+                       "(SELECT 1 FROM observations o WHERE o.variety_id = varieties.id)")
+            import catalog
+            for v in db.list_varieties(include_archived=True):
+                catalog.add(self.shared, "predio", v.get("cultivar") or "")
+            db.log("move", "workspace", None, f"Traspasado desde {Workspaces.title(src)} ({old_code})")
+            units = len(db.list_varieties())
+        finally:
+            db.close()
+        self.shared.log("move", "workspace", None,
+                        f"{src['name']} ({old_code}) -> {dst['name']} ({new_code})")
+        self.remember(self.get(dst["id"]))
+        return {"photos": res["renamed"], "units": units, "old": old_code, "new": new_code}
+
     def close(self) -> None:
         self.shared.close()
 

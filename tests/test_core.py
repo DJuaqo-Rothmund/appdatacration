@@ -1288,3 +1288,78 @@ def test_variety_catalog_separate_profiles_and_trial_variety(tmp_path):
     assert vs == {1: "Meeker", 2: "Heritage"}
     db.close()
     wss.close()
+
+
+def test_move_trial_to_empty_predio(tmp_path):
+    """Teléfono que registraba un predio con una versión antigua: al actualizar, todo
+    quedó en I+D › Nuevas variedades. «Mover a Predio» lo pasa a El Amanecer sin copiar
+    ni volver a subir: fotos NV -> AM (teléfono, IA y Drive) y NV queda vacío."""
+    import json
+    from drive_backup import DriveBackup
+    from workspaces import Workspaces
+    data = tmp_path / "datos"
+    data.mkdir()
+    old = Database(str(data / "fenorubus.sqlite3"))
+    vid = old.add_variety("Wakefield S3ER2", code="WAK", sector=3, irrigation=2)
+    week = old.current_week(dt.date(2026, 10, 5))
+    obs = old.get_or_create_observation(vid, week["id"])
+    old.close()
+    wss = Workspaces(str(data))
+    nv, am = wss.by_code("NV"), wss.by_code("AM")
+    db = wss.open(nv)
+    photo = synthetic_photo(55, "detail", str(data / "20261005-NV-WakS3ER2D.jpg"), 1)
+    pid = db.add_photo(obs["id"], "detail", photo)
+    PhenologyClassifier(db, HandcraftedExtractor()).add_reference(photo, 55, photo_id=pid)
+    db.execute("INSERT INTO drive_queue(photo_id, path, name, status, drive_id, created_at) "
+               "VALUES (?, ?, ?, 'done', 'file1', '2026')",
+               (pid, photo, "I+D/Nuevas variedades/Año 2026/Semana 41 · 05-10-2026/20261005-NV-WakS3ER2D.jpg"))
+    db.close()
+
+    busy = wss.open(am)                          # un predio con registros no se toca
+    bv = busy.add_variety("X", sector=1, irrigation=1)
+    busy.get_or_create_observation(bv, busy.current_week()["id"])
+    busy.close()
+    with pytest.raises(ValueError, match="ya tiene registros"):
+        wss.move_to_predio(nv, am)
+    os.remove(wss.path(am))
+
+    res = wss.move_to_predio(nv, am)
+    assert (res["old"], res["new"], res["photos"]) == ("NV", "AM", 1)
+    pr = wss.open(wss.by_code("AM"))
+    v = pr.list_varieties()[0]
+    assert v["name"] == "Equipo de riego 2, sector 3" and v["cultivar"] == "Wakefield"
+    path = pr.query_one("SELECT path FROM photos")["path"]
+    assert os.path.basename(path) == "20261005-AM-WakS3ER2D.jpg" and os.path.exists(path)
+    ref = wss.shared.query_one("SELECT workspace, image_path FROM ai_references")
+    assert ref == {"workspace": "AM", "image_path": path}
+    assert pr.reference_counts() == {55: 1}
+    empty = wss.open(wss.by_code("NV"))
+    assert empty.list_varieties() == [] and wss.records(wss.by_code("NV")) == 0
+    empty.close()
+    assert wss.last()["code"] == "AM"
+
+    # Drive: la carpeta del ensayo pasa a la del predio y la foto subida se renombra.
+    calls = []
+
+    def transport(method, url, headers, body):
+        calls.append((method, url, body))
+        if method == "GET":
+            return 200, json.dumps({"files": [{"id": "old1", "name": "Año 2026"}]}).encode()
+        return 200, json.dumps({"id": "new"}).encode()
+
+    class Auth:
+        def get_token(self, interactive):
+            return "t"
+
+    pr.set_setting("drive_enabled", True)
+    drive = DriveBackup(pr, authorizer=Auth(), transport=transport, metered=lambda: False)
+    assert drive.prefix == "Predio/El Amanecer/"
+    drive.flush()
+    patches = [(u, b) for m, u, b in calls if m == "PATCH"]
+    assert any("addParents" in u and "removeParents" in u for u, _ in patches)
+    assert any("/file1?" in u and b"20261005-AM-WakS3ER2D.jpg" in b for u, b in patches)
+    q = pr.query_one("SELECT name FROM drive_queue")["name"]
+    assert q == "Predio/El Amanecer/Año 2026/Semana 41 · 05-10-2026/20261005-AM-WakS3ER2D.jpg"
+    assert not pr.get_setting("ws_move_pending")
+    pr.close()
+    wss.close()
