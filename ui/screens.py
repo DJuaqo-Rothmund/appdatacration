@@ -1236,6 +1236,16 @@ class SamplingTab(MDBoxLayout):
             self.ids.week_kicker.text += " · NO MUESTREADA"
             self.ids.progress_text.text = "omitida"
         box.opacity = .45 if skipped else 1
+        # Semana recién completada (pasó de incompleta a completa mientras se registraba):
+        # serpentinas y «SEMANA x · COMPLETADA». Abrir una semana ya completa no lo repite.
+        done = bool(rows) and complete == len(rows) and not skipped
+        state = self.__dict__.setdefault("_week_done", {})
+        key = (getattr(a.db, "code", ""), week["id"])
+        if done and state.get(key) is False:
+            from ui import celebrate
+            Clock.schedule_once(lambda *_: celebrate.week_completed(
+                str(ph.iso_week(_dt.date.fromisoformat(week["start_date"]))[0])), .25)
+        state[key] = done
         n_meas = sum(1 for m in a.db.list_measures(week["id"]) if m["n"])
         self.ids.measures_btn.text = ("Mediciones de la semana" if not n_meas
                                       else f"Mediciones de la semana · {n_meas} con datos")
@@ -3876,6 +3886,13 @@ class MeasureScreen(MDScreen):
 
     def on_pre_leave(self, *_):
         self.commit_cells()
+
+    def save(self):
+        """Disquete: guarda lo escrito (también se guarda solo al salir), avisa y vuelve."""
+        self.commit_cells()
+        from ui import celebrate
+        app().back()
+        celebrate.saved("Medición guardada")
 
     def add_row(self):
         self.commit_cells()
