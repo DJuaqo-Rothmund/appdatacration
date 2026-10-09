@@ -66,6 +66,8 @@ class FenoRubusApp(MDApp):
     def build(self):
         import crashguard
         crashguard.install(notify=lambda text: self.toast(text))
+        import native_input
+        native_input.install()   # Android: campos de texto con el teclado real del teléfono
         theme.apply(self.theme_cls)
         theme.speed_up_theme_bindings()   # crear pantallas no se vuelve más lento con el uso
         Clock.schedule_interval(lambda *_: theme.purge_theme_observers(self.theme_cls), 20)

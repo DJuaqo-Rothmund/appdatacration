@@ -2302,53 +2302,108 @@ class ProgressRing(Widget):
     track = ColorProperty(c(theme.BERRY_SOFT))
 
 
-class CompletenessGrid(Widget):
-    """Mini-matriz variedad × semana: 2 completo, 1 parcial, 0 vacío."""
+def _muted_label(text: str):
+    return MDLabel(text=text, font_style="Caption", adaptive_height=True, halign="center",
+                   theme_text_color="Custom", text_color=c(theme.MUTED))
+
+
+class StageChip(BoxLayout):
+    """Etiqueta de estadio (leyenda del mapa)."""
+    text = StringProperty()
+    bg = ColorProperty(c("#FFFFFF"))
+    fg = ColorProperty(c(theme.INK))
+
+
+class PreviewTile(ButtonBehavior, BoxLayout):
+    """Ficha de la vista previa: foto, estado BBCH y nombre. Tocar abre el registro."""
+    title = StringProperty()
+    subtitle = StringProperty()
+    sub_color = ColorProperty(c(theme.MUTED))
+    badge = StringProperty()
+    badge_bg = ColorProperty(c("#FFFFFF", .9))
+    badge_fg = ColorProperty(c(theme.INK))
+
+
+class StageHeatmap(Widget):
+    """Mapa variedad × semana coloreado por estadio BBCH (con el código en la celda).
+    Tocar una celda abre ese registro (on_cell)."""
     rows = ListProperty([])
     weeks = ListProperty([])
-    COLORS = {2: theme.LEAF, 1: theme.BERRY_LIGHT, 0: "#FFFFFF"}
+    NAME_W, CELL_W, CELL_H, GAP, HEAD = dp(96), dp(34), dp(24), dp(3), dp(18)
 
-    def on_rows(self, *_):
-        self.height = dp(18) + len(self.rows) * dp(15)
+    def __init__(self, on_cell=None, **kw):
+        super().__init__(**kw)
+        self.on_cell = on_cell
+        self.size_hint = (None, None)
+        self._tex = {}
+        self.bind(rows=self._layout, weeks=self._layout, pos=self._redraw)
+
+    def _layout(self, *_):
+        self.width = self.NAME_W + max(1, len(self.weeks)) * self.CELL_W
+        self.height = self.HEAD + len(self.rows) * (self.CELL_H + self.GAP)
         self._redraw()
 
-    def on_size(self, *_):
-        self._redraw()
+    def _text(self, text, size, bold=False):
+        key = (text, size, bold)
+        if key not in self._tex:
+            from kivy.core.text import Label as CoreLabel
+            lb = CoreLabel(text=text, font_size=size, bold=bold)
+            lb.refresh()
+            self._tex[key] = lb.texture
+        return self._tex[key]
 
-    on_pos = on_size
+    def _cell_rect(self, i, j):
+        x = self.x + self.NAME_W + j * self.CELL_W + self.GAP / 2
+        y = self.top - self.HEAD - (i + 1) * (self.CELL_H + self.GAP)
+        return x, y, self.CELL_W - self.GAP, self.CELL_H
 
-    def _redraw(self):
-        from kivy.core.text import Label as CoreLabel
-        from kivy.graphics import Color, Rectangle, RoundedRectangle
+    def _redraw(self, *_):
+        from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
         self.canvas.clear()
-        if not self.rows or not self.weeks:
-            return
-        label_w = dp(40)
-        n = len(self.weeks)
-        cw = max(dp(6), (self.width - label_w) / n)
-        ch = dp(12)
-        gap = dp(3)
-        top = self.top - dp(16)
         with self.canvas:
-            for j, wk in enumerate(self.weeks):   # encabezados de semana (cada 2 si son muchas)
-                if n > 10 and j % 2:
-                    continue
-                t = CoreLabel(text=f"S{wk}", font_size=dp(9))
-                t.refresh()
+            for j, wk in enumerate(self.weeks):
+                t = self._text(wk, dp(10), True)
                 Color(*c(theme.MUTED))
-                Rectangle(texture=t.texture, size=t.texture.size,
-                          pos=(self.x + label_w + j * cw + (cw - t.texture.size[0]) / 2, top + dp(2)))
+                x = self.x + self.NAME_W + j * self.CELL_W + (self.CELL_W - t.size[0]) / 2
+                Rectangle(texture=t, size=t.size, pos=(x, self.top - self.HEAD + dp(3)))
             for i, r in enumerate(self.rows):
-                y = top - (i + 1) * (ch + gap)
-                t = CoreLabel(text=str(r["code"])[:6], font_size=dp(9), bold=True)
-                t.refresh()
-                Color(*c(theme.INK_2))
-                Rectangle(texture=t.texture, size=t.texture.size,
-                          pos=(self.x, y + (ch - t.texture.size[1]) / 2))
-                for j, st in enumerate(r["cells"]):
-                    Color(*c(self.COLORS[st], .95 if st else .55))
-                    RoundedRectangle(pos=(self.x + label_w + j * cw + gap / 2, y),
-                                     size=(cw - gap, ch), radius=[dp(3)])
+                name = r["name"] if len(r["name"]) <= 14 else r["name"][:13] + "…"
+                t = self._text(name, dp(11), True)
+                _x, y, _w, h = self._cell_rect(i, 0)
+                Color(*c(theme.INK))
+                Rectangle(texture=t, size=t.size, pos=(self.x, y + (h - t.size[1]) / 2))
+                for j, cell in enumerate(r["cells"]):
+                    x, y, w, h = self._cell_rect(i, j)
+                    code = cell["code"]
+                    bg, fg = theme.stage_colors(code)
+                    if code is None:
+                        Color(*c("#FFFFFF", .5))
+                        RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(6)])
+                        if cell["n_photos"]:   # foto sin estado: punto frambuesa
+                            Color(*c(theme.BERRY_LIGHT))
+                            RoundedRectangle(pos=(x + w / 2 - dp(3), y + h / 2 - dp(3)),
+                                             size=(dp(6), dp(6)), radius=[dp(3)])
+                        continue
+                    Color(*bg)
+                    RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(6)])
+                    Color(*c(theme.LEAF_DARK, .18))
+                    Line(rounded_rectangle=(x, y, w, h, dp(6)), width=dp(.8))
+                    t = self._text(ph.code_str(code), dp(10), True)
+                    Color(*fg)
+                    Rectangle(texture=t, size=t.size, pos=(x + (w - t.size[0]) / 2, y + (h - t.size[1]) / 2))
+
+    def on_touch_up(self, touch):
+        if not self.collide_point(*touch.pos) or self.on_cell is None:
+            return False
+        if abs(touch.x - touch.ox) > dp(12) or abs(touch.y - touch.oy) > dp(12):
+            return False   # fue un desplazamiento, no un toque
+        for i, r in enumerate(self.rows):
+            for j, cell in enumerate(r["cells"]):
+                x, y, w, h = self._cell_rect(i, j)
+                if x <= touch.x <= x + w and y <= touch.y <= y + h:
+                    self.on_cell(cell)
+                    return True
+        return False
 
 
 # ===========================================================================
@@ -2473,8 +2528,7 @@ class PreviewTab(MDScreen):
         ids.metric_photos.text = f"{sm['photos']}/{sm['photos_expected']}"
         ids.metric_bbch.text = f"{sm['bbch']}/{sm['cells']}"
         ids.metric_notes.text = str(sm["notes"])
-        ids.grid.weeks = sm["grid"]["weeks"]
-        ids.grid.rows = sm["grid"]["rows"]
+        self._build_visual(sm)
         lack = []
         if sm["missing_photos"]:
             n = sm["missing_photos"]   # registros sin ninguna foto
@@ -2485,6 +2539,98 @@ class PreviewTab(MDScreen):
         ids.lack_text.text_color = c(theme.BERRY) if lack else c(theme.LEAF)
         mb = sm["est_kb"] / 1024
         ids.size_text.text = f"≈ {mb:.1f} MB" if mb >= 1 else f"≈ {sm['est_kb']} KB"
+
+    # ------------------------------------------------- fichas y mapa de estados
+    MAX_TILES = 30
+
+    def _open_cell(self, cell):
+        app().open_observation(cell["variety_id"], cell["week_id"])
+
+    def _build_visual(self, sm):
+        """Semanal: una ficha por variedad (foto + estado). Por variedad: una ficha por
+        semana. Período y matriz: mapa de estados BBCH. Todo se toca para completar."""
+        a = app()
+        box = self.ids.visual
+        fast_clear(box)
+        unit = "sectores" if (a.workspace or {}).get("profile") == "predio" else "variedades"
+        codes = [cl["code"] for r in sm["rows"] for cl in r["cells"] if cl["code"] is not None]
+        span = ""
+        if codes:
+            lo, hi = min(codes, key=ph.bbch_value), max(codes, key=ph.bbch_value)
+            span = (f"BBCH {ph.code_str(lo)}" if lo == hi
+                    else f"BBCH {ph.code_str(lo)} a {ph.code_str(hi)}")
+        if self.kind in ("weekly", "variety"):
+            if self.kind == "weekly":
+                cells = [(r, r["cells"][0]) for r in sm["rows"] if r["cells"]]
+                ready = sum(1 for _r, cl in cells if cl["code"] is not None and cl["n_photos"])
+                head = f"{ready} de {len(cells)} {unit} listas"
+            else:
+                row = sm["rows"][0] if sm["rows"] else {"cells": []}
+                cells = [(row, cl) for cl in reversed(row["cells"])]   # la más reciente primero
+                head = f"{len(cells)} semanas de registro"
+            self.ids.headline.text = " · ".join(x for x in (head, span) if x) + \
+                ("  ·  toque una ficha para completarla" if cells else "")
+            from kivy.uix.gridlayout import GridLayout
+            grid = GridLayout(cols=3, spacing=dp(8), size_hint_y=None)
+            grid.bind(minimum_height=grid.setter("height"))
+            for r, cl in cells[:self.MAX_TILES]:
+                grid.add_widget(self._tile(r, cl))
+            box.add_widget(grid)
+            if len(cells) > self.MAX_TILES:
+                box.add_widget(_muted_label(f"+ {len(cells) - self.MAX_TILES} más en el informe"))
+            return
+        self.ids.headline.text = " · ".join(x for x in (
+            f"{len(sm['rows'])} {unit} × {len(sm['week_labels'])} semanas", span) if x) + \
+            "  ·  toque una celda para abrir el registro"
+        from kivy.uix.scrollview import ScrollView
+        hm = StageHeatmap(on_cell=self._open_cell)
+        hm.weeks, hm.rows = sm["week_labels"], sm["rows"]
+        sv = ScrollView(do_scroll_x=True, do_scroll_y=False, size_hint=(1, None), height=hm.height,
+                        bar_width=dp(3), scroll_type=["bars", "content"])
+        sv.add_widget(hm)
+        box.add_widget(sv)
+        macros = sorted({ph.macro_of(cd) for cd in codes})
+        if macros:
+            from kivy.uix.stacklayout import StackLayout
+            legend = StackLayout(size_hint_y=None, spacing=dp(6))
+            legend.bind(minimum_height=legend.setter("height"))
+            for m in macros:
+                bg, fg = theme.stage_colors(m * 10)
+                legend.add_widget(StageChip(text=ph.MACRO_STAGES.get(m, ""), bg=bg, fg=fg))
+            box.add_widget(legend)
+
+    def _tile(self, row, cell):
+        code, n = cell["code"], cell["n_photos"]
+        if self.kind == "weekly":
+            title = row["name"]
+            ok_sub = row["cultivar"] or (ph.bbch_label(code) if code is not None else "")
+        else:
+            d = _dt.date.fromisoformat(cell["date"])
+            title = f"{cell['week']} · {d.day} {ph.MESES[d.month - 1][:3]}"
+            ok_sub = ph.bbch_label(code) if code is not None else ""
+        if code is None and not n:
+            sub, col = "Sin registro", c(theme.BERRY)
+        elif not n:
+            sub, col = "Falta foto", c(theme.BERRY)
+        elif code is None:
+            sub, col = "Falta estado", c(theme.BERRY)
+        else:
+            sub, col = ok_sub, c(theme.MUTED)
+        bg, fg = bbch_tag_colors(code)
+        tile = PreviewTile(title=title, subtitle=sub, sub_color=col,
+                           badge=f"BBCH {ph.code_str(code)}" if code is not None else "",
+                           badge_bg=bg, badge_fg=fg)
+        thumb = thumb_widget(cell["photo"], 240)
+        thumb.pos_hint = {"x": 0, "y": 0}   # dentro del FloatLayout (si no, queda en 0,0)
+        thumb.clear_widgets()               # el ícono va centrado en la ficha (abajo)
+        box = tile.ids.thumb_box
+        box.add_widget(thumb, index=1)
+        if not cell["photo"]:
+            box.add_widget(MDIcon(icon="camera-plus-outline", theme_text_color="Custom",
+                                  text_color=c(theme.LEAF, .5), font_size="26sp",
+                                  pos_hint={"center_x": .5, "center_y": .55}), index=1)
+        tile.bind(on_release=lambda *_: self._open_cell(cell))
+        return tile
 
     # ----------------------------------------------------------- vista previa
     def open_preview(self):
@@ -3864,6 +4010,7 @@ class MeasureScreen(MDScreen):
                                background_color=c("#FFFFFF"), foreground_color=c(theme.INK),
                                cursor_color=c(theme.LEAF_DARK))
                 ti.entry_id, ti.col = e["id"], col
+                ti.native_edit = False   # planilla: se escribe de corrido con el teclado de la app
                 ti.bind(focus=self._cell_focus)
                 ti.bind(on_text_validate=self._cell_next)
                 grid.add_widget(ti)

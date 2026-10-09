@@ -1560,34 +1560,87 @@
         theme_text_color: "Custom"
         text_color: c(theme.MUTED)
 
-<LegendDot@BoxLayout>:
-    size_hint: None, None
-    size: self.minimum_width, dp(16)
-    spacing: dp(4)
-    color: 1, 1, 1, 1
-    text: ""
-    Widget:
-        size_hint: None, None
-        size: dp(10), dp(10)
-        pos_hint: {"center_y": .5}
-        canvas:
-            Color:
-                rgba: root.color
-            RoundedRectangle:
-                pos: self.pos
-                size: self.size
-                radius: [dp(3)]
-            Color:
-                rgba: c(theme.LINE)
-            Line:
-                rounded_rectangle: (self.x, self.y, self.width, self.height, dp(3))
+<PreviewTile>:
+    orientation: "vertical"
+    size_hint_y: None
+    height: dp(146)
+    spacing: dp(3)
+    padding: dp(5), dp(5), dp(5), dp(6)
+    canvas.before:
+        Color:
+            rgba: c("#FFFFFF", .62 if self.state == "normal" else .9)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(16)]
+        Color:
+            rgba: c(theme.LEAF_DARK, .10)
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, dp(16))
+            width: dp(.8)
+    FloatLayout:
+        id: thumb_box
+        size_hint_y: None
+        height: dp(92)
+        BoxLayout:
+            size_hint: None, None
+            size: badge_lbl.texture_size[0] + dp(12), dp(20)
+            pos_hint: {"right": .97, "y": .04}
+            opacity: 1 if root.badge else 0
+            canvas.before:
+                Color:
+                    rgba: root.badge_bg
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [dp(10)]
+            Label:
+                id: badge_lbl
+                text: root.badge
+                font_size: "10sp"
+                bold: True
+                color: root.badge_fg
     MDLabel:
-        text: root.text
+        text: root.title
         font_style: "Caption"
-        adaptive_size: True
-        pos_hint: {"center_y": .5}
+        bold: True
+        shorten: True
+        shorten_from: "right"
+        size_hint_y: None
+        height: dp(16)
         theme_text_color: "Custom"
-        text_color: c(theme.MUTED)
+        text_color: c(theme.INK)
+    MDLabel:
+        text: root.subtitle
+        font_size: "10sp"
+        shorten: True
+        shorten_from: "right"
+        size_hint_y: None
+        height: dp(14)
+        theme_text_color: "Custom"
+        text_color: root.sub_color
+
+<StageChip>:
+    size_hint: None, None
+    size: chip_lbl.texture_size[0] + dp(16), dp(22)
+    canvas.before:
+        Color:
+            rgba: root.bg
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(11)]
+        Color:
+            rgba: c(theme.LEAF_DARK, .15)
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, dp(11))
+            width: dp(.8)
+    Label:
+        id: chip_lbl
+        text: root.text
+        font_size: "10sp"
+        bold: True
+        color: root.fg
 
 <PreviewTab>:
     md_bg_color: 0, 0, 0, 0
@@ -1672,23 +1725,13 @@
                             id: metric_notes
                             icon: "note-text-outline"
                             caption: "notas"
-                CompletenessGrid:
-                    id: grid
-                    size_hint_y: None
-                    height: dp(40)
+                Muted:
+                    id: headline
                 MDBoxLayout:
+                    id: visual
+                    orientation: "vertical"
                     adaptive_height: True
-                    spacing: dp(12)
-                    LegendDot:
-                        color: c(theme.LEAF)
-                        text: "completo"
-                    LegendDot:
-                        color: c(theme.BERRY_LIGHT)
-                        text: "parcial"
-                    LegendDot:
-                        color: 1, 1, 1, .8
-                        text: "vacío"
-                    Widget:
+                    spacing: dp(10)
                 MDBoxLayout:
                     adaptive_height: True
                     MDLabel:

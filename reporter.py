@@ -756,10 +756,16 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
     cells = complete = photos = bbch = notes = miss_photos = 0
     missing: list[str] = []
     grid = {v["id"]: [] for v in varieties}
+    detail = {v["id"]: [] for v in varieties}   # celda a celda: foto, estado (vista previa)
     for w in weeks:
         for v in varieties:
             obs = db.get_observation(v["id"], w["id"])
             ph_ = db.get_photos(obs["id"]) if obs else {}
+            shown = ph_.get("detail") or ph_.get("canopy") or next(iter(ph_.values()), None)
+            detail[v["id"]].append({
+                "variety_id": v["id"], "week_id": w["id"], "week": ph.week_short(w),
+                "date": w["start_date"], "photo": shown["path"] if shown else None,
+                "code": obs["bbch_code"] if obs else None, "n_photos": len(ph_)})
             cells += 1
             photos += len(ph_)
             miss_photos += 0 if ph_ else 1
@@ -781,4 +787,8 @@ def report_summary(db, kind: str, season: int, week_id: int | None = None,
             "grid": {"weeks": [ph.week_of_year(w) for w in weeks],
                      "rows": [{"name": v["name"], "code": v["code"] or v["name"][:3],
                                "cells": grid[v["id"]]} for v in varieties]},
-            "est_kb": 40 + {"period": cells * 35, "matrix": cells * 22}.get(kind, photos * EST_KB_PER_PHOTO)}
+            "est_kb": 40 + {"period": cells * 35, "matrix": cells * 22}.get(kind, photos * EST_KB_PER_PHOTO),
+            # Vista previa visual: fichas (semanal / por variedad) y mapa de estados.
+            "week_labels": [ph.week_short(w) for w in weeks],
+            "rows": [{"variety_id": v["id"], "name": v["name"], "cultivar": v.get("cultivar") or "",
+                      "cells": detail[v["id"]]} for v in varieties]}
